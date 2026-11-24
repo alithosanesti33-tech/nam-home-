@@ -1,0 +1,39 @@
+name: Build NAM Home
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get JUCE
+        run: git clone --depth 1 --branch 8.0.6 https://github.com/juce-framework/JUCE.git "$HOME/JUCE"
+      - name: Get NAM core (v0.6.0, supports A1 and A2 captures)
+        run: |
+          git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git "$HOME/NAMCore"
+          cd "$HOME/NAMCore" && git submodule update --init --depth 1 Dependencies/eigen
+      - name: Configure
+        run: cmake -B build -S . -DJUCE_PATH="$HOME/JUCE" -DNAM_CORE_PATH="$HOME/NAMCore" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - name: Build app
+        run: cmake --build build --config Release --target NAMHome_Standalone -j
+      - name: Sign locally
+        run: codesign --force --deep --sign - "build/NAMHome_artefacts/Release/Standalone/NAM Home.app"
+      - name: Zip app
+        run: cd build/NAMHome_artefacts/Release/Standalone && ditto -c -k --keepParent "NAM Home.app" "$GITHUB_WORKSPACE/NAM-Home.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NAM-Home
+          path: NAM-Home.zip
+      - name: Publish latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest --title "Latest build" --notes "Newest NAM Home build. Install or update with ~/namupdate.sh"
+          gh release upload latest NAM-Home.zip --clobber
