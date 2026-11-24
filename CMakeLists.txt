@@ -25,6 +25,8 @@ juce_add_plugin(NAMHome
     PLIST_TO_MERGE "<plist><dict><key>NSDownloadsFolderUsageDescription</key><string>NAM Home watches your Downloads folder so new captures and IRs are added to your library automatically.</string></dict></plist>"
 )
 
+juce_generate_juce_header(NAMHome)
+
 file(GLOB NAM_SOURCES "${NAM_CORE_PATH}/NAM/*.cpp" "${NAM_CORE_PATH}/NAM/wavenet/*.cpp")
 
 target_sources(NAMHome PRIVATE
