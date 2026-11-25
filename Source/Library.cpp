@@ -11,7 +11,7 @@ juce::String LibraryItem::creditLine() const
 
 GainLevel gainLevelFromToneType (const juce::String& t)
 {
-    const auto s = t.toLowerCase();
+    const auto s = t.toLowerCase().replaceCharacter ('-', '_').replace ("high_gain", "hi_gain").replace ("highgain", "hi_gain");
     if (s == "clean")                           return GainLevel::Clean;
     if (s == "crunch")                          return GainLevel::Crunch;
     if (s == "overdrive")                       return GainLevel::Overdrive;

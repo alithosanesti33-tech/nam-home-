@@ -1,64 +1,25 @@
 #pragma once
 #include <JuceHeader.h>
+#include "Engine.h"
 #include "Library.h"
+#include "Tone3000.h"
 
-namespace nam { class DSP; }
-
-// Plain RBJ biquad, coefficients computed without allocating (safe on the audio thread).
-struct Biquad
-{
-    enum class Type { HighPass, LowPass, Peak, LowShelf, HighShelf };
-    void set (Type t, double sr, double freq, double q, double gainDb);
-    float process (float x) noexcept
-    {
-        const float y = b0 * x + z1;
-        z1 = b1 * x - a1 * y + z2;
-        z2 = b2 * x - a2 * y;
-        return y;
-    }
-    void reset() { z1 = z2 = 0.0f; }
-    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
-};
-
-// One NAM capture (amp or pedal). Loaded on the message thread, swapped in safely.
-class NamSlot
+// Saved rigs live as .namrig files (JSON) in Music/NAM Home/Presets.
+class PresetManager
 {
 public:
-    NamSlot();
-    ~NamSlot();
-    juce::String load (const juce::File& f, double sampleRate, int maxBlock); // returns error text, empty if OK
-    void unload();
-    void prepare (double sampleRate, int maxBlock);
-    // Processes in place. Returns false if nothing is loaded (signal passes through unchanged).
-    bool process (float* data, int numSamples) noexcept;
-
-    juce::String getPath() const { return path; }
-    bool isLoaded() const { return loaded.load(); }
-    bool sampleRateMismatch() const { return mismatch.load(); }
-    double getExpectedRate() const { return expectedRate; }
-    float getNormGainDb() const { return normGainDb; }
-    std::atomic<bool> normalize { true };
-
+    explicit PresetManager (const juce::File& libraryFolder);
+    juce::File getFolder() const { return folder; }
+    juce::StringArray list() const;
+    bool save (const juce::String& name, const juce::var& rig);
+    juce::var load (const juce::String& name) const;
+    bool remove (const juce::String& name);
+    bool rename (const juce::String& from, const juce::String& to);
+    bool exists (const juce::String& name) const { return fileFor (name).existsAsFile(); }
+    static juce::String cleanName (const juce::String& s);
 private:
-    juce::SpinLock lock;
-    std::unique_ptr<nam::DSP> dsp;
-    juce::String path;
-    std::atomic<bool> loaded { false }, mismatch { false };
-    double expectedRate = 48000.0;
-    float normGainDb = 0.0f;
-    std::vector<float> scratch;
-    int maxBlockSize = 512;
-};
-
-// One cabinet IR inside the blend.
-struct IrSlot
-{
-    juce::dsp::Convolution conv;
-    juce::AudioBuffer<float> original; // message thread only, kept to rebuild alignment / polarity
-    double originalRate = 48000.0;
-    juce::String path;
-    std::atomic<bool> loaded { false };
-    int appliedAlign = 0;
+    juce::File fileFor (const juce::String& name) const { return folder.getChildFile (cleanName (name) + ".namrig"); }
+    juce::File folder;
 };
 
 class NAMHomeProcessor : public juce::AudioProcessor, private juce::Timer
@@ -86,50 +47,34 @@ public:
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 
-    // Loading (message thread)
-    juce::String loadAmp (const juce::File& f);
-    juce::String loadPedal (const juce::File& f);
-    juce::String loadIr (int index, const juce::File& f);
-    void clearAmp()   { amp.unload(); }
-    void clearPedal() { pedal.unload(); }
-    void clearIr (int index);
-
-    NamSlot& getAmp()   { return amp; }
-    NamSlot& getPedal() { return pedal; }
-    IrSlot& getIr (int i) { return irs[(size_t) i]; }
-    static constexpr int numIrs = 3;
-
-    juce::AudioProcessorValueTreeState params;
+    Engine engine;
     Library library;
+    PresetManager presets;
+    juce::PropertiesFile& settings() { return *appSettings; }
+    std::unique_ptr<Tone3000> tone3000;
 
-    std::atomic<float> inputPeak { 0 }, outputPeakL { 0 }, outputPeakR { 0 };
-    double getCpuLoad() const { return loadMeasurer.getLoadAsProportion(); }
+    // presets
+    juce::String currentPreset;
+    bool dirty = false;
+    juce::var rigToVar() const;
+    void rigFromVar (const juce::var& v);
+    bool loadPreset (const juce::String& name);
+    bool savePreset (const juce::String& name);
+    void newRig();
+    void buildDefaultRig();
+    std::function<void()> onRigChanged;      // UI refresh after a preset/program change
+    std::function<void (const juce::String&)> onNotice;
+
+    // loading files into blocks, with the TONE3000-style helpers
+    juce::String loadFileIntoBlock (const juce::File& f, int row, int col);
+    void afterAmpLoaded (int row, int col);
+
     double getSampleRateNow() const { return currentRate; }
-    bool anyRateMismatch() const { return amp.sampleRateMismatch() || pedal.sampleRateMismatch(); }
 
 private:
-    static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void timerCallback() override;
-    void rebuildIr (int index);
-    // Parameter pointers cached once, so the audio thread never looks anything up by name.
-    struct P
-    {
-        std::atomic<float> *inGain, *outLevel, *monoOut, *pedalIn, *pedalOut, *pedalBypass,
-                           *ampDrive, *ampTight, *ampPreMid, *ampLow, *ampMid, *ampHigh, *ampOut, *ampBypass, *ampNormalize,
-                           *cabLowCut, *cabHighCut, *cabBypass;
-        std::atomic<float> *irLevel[3], *irPan[3], *irPolarity[3], *irAlign[3], *irMute[3];
-    } pr;
-
-    NamSlot amp, pedal;
-    std::array<IrSlot, numIrs> irs;
-
+    std::unique_ptr<juce::PropertiesFile> appSettings;
     double currentRate = 48000.0;
-    int currentBlock = 512;
-    juce::AudioBuffer<float> mono, irOut, stereo;
-    Biquad tight, preMid, postLow, postMid, postHigh;
-    Biquad cabLowCut[2], cabHighCut[2];
-    juce::SmoothedValue<float> sIn, sPedalIn, sPedalOut, sDrive, sAmpOut, sOut, sIr[numIrs];
-    juce::AudioProcessLoadMeasurer loadMeasurer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NAMHomeProcessor)
 };
