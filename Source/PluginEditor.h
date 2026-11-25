@@ -49,6 +49,7 @@ private:
     IconButton power { IconButton::Icon::Power, "Switch this block on or off (double-click the tile also works)" };
     IconButton midi { IconButton::Icon::Midi, "MIDI learn: on/off switch for this block" };
     IconButton close { IconButton::Icon::Chevron, "Close the editor (Esc)" };
+    juce::TextButton starts { "Starting points" };
 };
 
 class NAMHomeEditor : public juce::AudioProcessorEditor,

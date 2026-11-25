@@ -209,6 +209,35 @@ SaxBlock::SaxBlock() : Block (Type::Sax)
     ndsp::SaxSampleBank::get().requestLoad();
 }
 
+std::vector<Block::StartingPoint> SaxBlock::startingPoints() const
+{
+    return {
+        { "Smooth soprano (Kenny G style)",
+          "Soprano, sweet and breathy, slow singing vibrato, gentle glides between notes.",
+          { { "model", 0 }, { "octave", 2 }, { "character", 1 }, { "sound", 0 }, { "bright", 55 }, { "breath", 45 }, { "growl", 0 }, { "subtone", 15 },
+            { "body", 55 }, { "attack", 40 }, { "legato", 40 }, { "scoop", 25 }, { "fall", 10 },
+            { "vibMode", 1 }, { "vibDepth", 22 }, { "vibRate", 5.0f }, { "vibDelay", 450 }, { "sustain", 75 } } },
+        { "Bright modal soprano (Coltrane style)",
+          "Soprano with a hard, bright, focused tone, little vibrato and quick articulation.",
+          { { "model", 0 }, { "octave", 2 }, { "character", 0 }, { "sound", 0 }, { "bright", 85 }, { "breath", 15 }, { "growl", 5 }, { "subtone", 0 },
+            { "body", 45 }, { "attack", 80 }, { "legato", 8 }, { "scoop", 0 }, { "fall", 0 },
+            { "vibMode", 4 }, { "vibDepth", 12 }, { "sustain", 60 } } },
+        { "Pink Floyd tenor",
+          "Warm, smoky tenor for slow solos: subtone, breath and a delayed vibrato. Add a long reverb after it.",
+          { { "model", 2 }, { "octave", 1 }, { "character", 3 }, { "sound", 0 }, { "bright", 45 }, { "breath", 40 }, { "growl", 10 }, { "subtone", 40 },
+            { "body", 70 }, { "attack", 45 }, { "legato", 30 }, { "scoop", 15 }, { "fall", 20 },
+            { "vibMode", 1 }, { "vibDepth", 28 }, { "vibRate", 5.2f }, { "vibDelay", 500 }, { "sustain", 80 } } },
+        { "80s pop alto",
+          "Bright, punchy alto that cuts through a mix.",
+          { { "model", 1 }, { "octave", 2 }, { "character", 0 }, { "sound", 0 }, { "bright", 75 }, { "breath", 25 }, { "growl", 15 }, { "subtone", 0 },
+            { "body", 50 }, { "attack", 70 }, { "legato", 15 }, { "vibMode", 1 }, { "vibDepth", 25 } } },
+        { "R&B alto",
+          "Alto with grit and growl on hard picks, and fall-offs at the end of notes.",
+          { { "model", 1 }, { "octave", 2 }, { "character", 2 }, { "sound", 0 }, { "bright", 65 }, { "breath", 30 }, { "growl", 45 }, { "subtone", 10 },
+            { "body", 60 }, { "attack", 75 }, { "legato", 20 }, { "fall", 35 }, { "scoop", 20 }, { "vibMode", 4 } } },
+    };
+}
+
 juce::String SaxBlock::getTitle() const { return params[sModel]->text() + " sax"; }
 juce::String SaxBlock::getSubtitle() const { return params[sCharacter]->text(); }
 

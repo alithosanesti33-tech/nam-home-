@@ -44,7 +44,25 @@ Drawer::Drawer (NAMHomeProcessor& p) : proc (p)
         if (auto b = current()) { proc.engine.armLearn (b->id, -1); if (onMessage) onMessage ("Press the footswitch on your MIDI device now...", false); }
     };
     close.onClick = [this] { if (onClose) onClose(); };
-    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close }) addAndMakeVisible (c);
+    starts.onClick = [this]
+    {
+        auto b = current();
+        if (b == nullptr) return;
+        PopupMenu m;
+        auto list = b->startingPoints();
+        for (int i = 0; i < (int) list.size(); ++i) m.addItem (i + 1, list[(size_t) i].name);
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&starts), [this, b, list] (int r)
+        {
+            if (r <= 0 || current() != b) return;
+            b->applyStartingPoint (list[(size_t) r - 1]);
+            proc.dirty = true;
+            sync(); repaint();
+            if (onChanged) onChanged();
+            if (onMessage) onMessage (list[(size_t) r - 1].name + ": " + list[(size_t) r - 1].note, false);
+        });
+    };
+    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close, &starts }) addChildComponent (c);
+    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close }) c->setVisible (true);
 }
 
 void Drawer::show (std::shared_ptr<Block> b)
@@ -53,6 +71,7 @@ void Drawer::show (std::shared_ptr<Block> b)
     editor->onStructureChanged = [this] { repaint(); if (onChanged) onChanged(); };
     editor->onError = [this] (const String& s) { if (onMessage) onMessage (s, true); };
     addAndMakeVisible (*editor);
+    starts.setVisible (! b->startingPoints().empty());
     resized();
     repaint();
 }
@@ -95,6 +114,8 @@ void Drawer::resized()
     midi.setBounds (hdr.removeFromRight (32));
     hdr.removeFromRight (6);
     power.setBounds (hdr.removeFromRight (32));
+    hdr.removeFromRight (10);
+    starts.setBounds (hdr.removeFromRight (140));
     if (editor != nullptr) editor->setBounds (getLocalBounds().withTrimmedTop (56).reduced (2, 4));
 }
 

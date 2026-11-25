@@ -394,6 +394,9 @@ void Engine::handleMidi (juce::MidiBuffer& midi, const Plan& plan)
     for (const auto meta : midi)
     {
         const auto msg = meta.getMessage();
+        if (msg.isMidiStart()) { Block::context().running = true; ++Block::context().starts; continue; }
+        if (msg.isMidiContinue()) { Block::context().running = true; continue; }
+        if (msg.isMidiStop()) { Block::context().running = false; continue; }
         int kind = -1, num = 0, val = 0;
         if (msg.isController()) { kind = kindCC; num = msg.getControllerNumber(); val = msg.getControllerValue(); }
         else if (msg.isNoteOn()) { kind = kindNote; num = msg.getNoteNumber(); val = juce::jmax (64, (int) msg.getVelocity()); }

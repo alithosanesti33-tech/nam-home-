@@ -32,6 +32,10 @@ struct Param
 struct EngineContext
 {
     std::atomic<float> bpm { 120.0f };
+    // transport: MIDI Start / Stop / Continue (or Logic's play button inside the plugin)
+    std::atomic<bool> running { false };
+    std::atomic<int> starts { 0 };          // goes up on every Start, so sequencers restart on beat 1
+    std::atomic<double> hostBeats { -1.0 }; // Logic's song position in beats while playing, else -1
 };
 
 class Block
@@ -75,6 +79,15 @@ public:
 
     virtual void reset() {}
     virtual bool hasTails() const { return false; }
+
+    // ready-made settings for this block ("Saturn's Ring", "Smooth soprano"...), from the settings panel
+    struct StartingPoint { juce::String name, note; std::vector<std::pair<const char*, float>> values; };
+    virtual std::vector<StartingPoint> startingPoints() const { return {}; }
+    void applyStartingPoint (const StartingPoint& sp)
+    {
+        for (auto& [pid, v] : sp.values)
+            for (auto& prm : params) if (prm->id == pid) { prm->set (v); break; }
+    }
     virtual juce::var saveExtra() const { return {}; }
     virtual void loadExtra (const juce::var&) {}
 

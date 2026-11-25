@@ -887,7 +887,8 @@ namespace
         (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),// minor pentatonic
         (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9)  // major pentatonic
     };
-    enum FzP { fHold, fMode, fSource, fPitch, fQuant, fVolume, fFadeIn, fFadeOut, fTone, fDry, fSet, fRoot, fNote0, fLevel0 = fNote0 + 12 };
+    enum FzP { fHold, fMode, fSource, fPitch, fQuant, fVolume, fFadeIn, fFadeOut, fTone, fDry, fSet, fRoot, fNote0, fLevel0 = fNote0 + 12,
+               fShimmer = fLevel0 + 12, fMod, fWidth, fSeqOn, fSeqSteps, fSeqRate, fSeqGlide, fSeqRun, fStepPitch0, fStepLevel0 = fStepPitch0 + 16 };
 }
 
 FreezeBlock::FreezeBlock() : Block (Type::Freeze)
@@ -909,11 +910,33 @@ FreezeBlock::FreezeBlock() : Block (Type::Freeze)
     for (int i = 0; i < 12; ++i) addToggle ("n" + juce::String (i), noteNames[i], true);
     currentGroup = "Note levels";
     for (int i = 0; i < 12; ++i) addFloat ("lv" + juce::String (i), juce::String (noteNames[i]) + " level", 0, 100, 100, "%", -1, 1);
+    currentGroup = "Freeze";
+    addFloat ("shimmer", "Octave shimmer", 0, 100, 0, "%", -1, 1);
+    addFloat ("mod", "Movement", 0, 100, 0, "%", -1, 1);
+    addFloat ("width", "Width", 0, 150, 100, "%", -1, 1);
+    currentGroup = "Sequencer";
+    addToggle ("seqOn", "Sequencer", false);
+    addChoice ("seqSteps", "Steps", { "8", "16" }, 0);
+    addChoice ("seqRate", "Step length", { "1/2", "1/4", "1/8 dot", "1/8", "1/8 trip", "1/16" }, 3);
+    addFloat ("seqGlide", "Glide", 0, 500, 0, "ms", 120, 1);
+    addChoice ("seqRun", "Runs", { "While held", "With MIDI start / stop (or Logic's transport)" }, 0);
+    for (int i = 0; i < 16; ++i) addFloat ("sp" + juce::String (i), "Step " + juce::String (i + 1) + " pitch", -24, 24, 0, "st", -1, 1);
+    for (int i = 0; i < 16; ++i) addFloat ("sv" + juce::String (i), "Step " + juce::String (i + 1) + " level", 0, 100, 100, "%", -1, 1);
+    for (int i = fSeqOn + 1; i < (int) params.size(); ++i)
+    {
+        const int stepIdx = i >= fStepLevel0 ? i - fStepLevel0 : i >= fStepPitch0 ? i - fStepPitch0 : -1;
+        params[(size_t) i]->visible = [stepIdx] (const Block& b)
+        {
+            if (! b.params[(size_t) fSeqOn]->on()) return false;
+            return stepIdx < 8 || b.params[(size_t) fSeqSteps]->getInt() == 1;   // steps 9-16 only in 16-step mode
+        };
+    }
     currentGroup = {};
 }
 
-void FreezeBlock::prepare (double, int)
+void FreezeBlock::prepare (double sr, int)
 {
+    for (auto& sh : seqShift) sh.prepare ((float) sr, 0.060f, 0.70f);
     fft = std::make_unique<juce::dsp::FFT> (order);
     inRing.assign ((size_t) fftSize, 0.0f);
     window.resize ((size_t) fftSize);
@@ -933,6 +956,10 @@ void FreezeBlock::reset()
     for (auto& o : outAcc) std::fill (o.begin(), o.end(), 0.0f);
     inPos = hopCount = outRead = 0;
     holding = haveFrozen = false;
+    for (auto& sh : seqShift) sh.clear();
+    seqPos = 0; seqStep = -1; seqStarts = -1; seqWasRunning = false;
+    seqSemi = seqSemiTarget = 0; seqGain = seqGainTarget = 1;
+    modPh = 0;
     level = 0;
     lastNoteSet = -1;
 }
@@ -967,7 +994,13 @@ void FreezeBlock::synthFrame()
     const float sr = sampleRate;
     float semis = p (fPitch);
     if ((int) p (fQuant) == 1) semis = std::round (semis);
+    // movement: a very slow drift of a few cents, like a pad that breathes
+    const float mod = p (fMod) * 0.01f;
+    modPh += (float) hop / sr * 0.11f; if (modPh > 1.0f) modPh -= 1.0f;
+    semis += mod * 0.12f * std::sin (twoPi * modPh);
     const float ratio = std::exp2 (semis / 12.0f);
+    shimmerSm += 0.25f * (p (fShimmer) * 0.01f - shimmerSm);
+    const float shimmer = shimmerSm;
     const bool drone = (int) p (fSource) == 1;
     const float toneHz = p (fTone);
     const int half = fftSize / 2;
@@ -1007,13 +1040,26 @@ void FreezeBlock::synthFrame()
             const float* m = drone ? envSmooth.data() : frozen.data();
             float a = m[s0] + (m[s0 + 1] - m[s0]) * fr;
             a *= noteWeight[(size_t) s0] + (noteWeight[(size_t) s0 + 1] - noteWeight[(size_t) s0]) * fr;
+            if (shimmer > 0.001f)
+            {
+                // a quiet octave above: bin k also takes from bin k / (2 * ratio)
+                const float src2 = (float) k / (2.0f * ratio);
+                const int t0 = (int) src2;
+                if (t0 >= 1 && t0 < half - 1)
+                {
+                    const float f2 = src2 - (float) t0;
+                    const float a2 = (m[t0] + (m[t0 + 1] - m[t0]) * f2)
+                                   * (noteWeight[(size_t) t0] + (noteWeight[(size_t) t0 + 1] - noteWeight[(size_t) t0]) * f2);
+                    a = std::sqrt (a * a + a2 * a2 * shimmer * shimmer * 0.30f);
+                }
+            }
             if (drone) a *= 3.0f;
             const float f = (float) k * sr / (float) fftSize;
             if (f > toneHz) a *= std::exp (-(f - toneHz) / (0.35f * toneHz));
             // each bin turns at its own frequency plus a little random drift, so the hold shimmers
             // instead of buzzing; left and right drift differently for width
             auto& ph = phase[c][(size_t) k];
-            ph += twoPi * (float) k * (float) hop / (float) fftSize + (rng.nextFloat() - 0.5f) * 1.1f;
+            ph += twoPi * (float) k * (float) hop / (float) fftSize + (rng.nextFloat() - 0.5f) * (1.1f + 0.6f * mod);
             ph = std::remainder (ph, twoPi);
             work[(size_t) (2 * k)] = a * std::cos (ph);
             work[(size_t) (2 * k + 1)] = a * std::sin (ph);
@@ -1045,6 +1091,10 @@ void FreezeBlock::process (float* L, float* R, int n)
     const float downStep = 1.0f / (std::max (5.0f, p (fFadeOut)) * 0.001f * sampleRate);
     if (hold && ! holding) capture (false);
     holding = hold;
+    const bool seqOn = p (fSeqOn) > 0.5f;
+    const float width = p (fWidth) * 0.01f;
+    const float glideMs = p (fSeqGlide);
+    const float glideCoef = glideMs < 1.0f ? 1.0f : 1.0f - std::exp (-1.0f / (glideMs * 0.001f * sampleRate * 0.35f));
 
     for (int i = 0; i < n; ++i)
     {
@@ -1060,11 +1110,79 @@ void FreezeBlock::process (float* L, float* R, int n)
         const float a = outAcc[0][(size_t) outRead], b = outAcc[1][(size_t) outRead];
         outAcc[0][(size_t) outRead] = 0; outAcc[1][(size_t) outRead] = 0;
         outRead = (outRead + 1) % fftSize;
+        float wa = a, wb = b;
+        if (seqOn)
+        {
+            if ((i & 31) == 0) advanceSequencer (std::min (32, n - i));
+            seqSemi += glideCoef * (seqSemiTarget - seqSemi);
+            seqGain += 0.004f * (seqGainTarget - seqGain);          // ~5 ms: steps without clicks
+            const float r = std::exp2 (seqSemi / 12.0f);
+            wa = seqShift[0].process (wa, r) * seqGain;
+            wb = seqShift[1].process (wb, r) * seqGain;
+        }
+        const float mid = 0.5f * (wa + wb), side = 0.5f * (wa - wb) * width;
         const float g = level * level * vol;   // squared: fades sound even
-        L[i] = L[i] * dry + a * g;
-        R[i] = R[i] * dry + b * g;
+        L[i] = L[i] * dry + (mid + side) * g;
+        R[i] = R[i] * dry + (mid - side) * g;
     }
     if (! holding && level <= 0.0f) haveFrozen = false;
+}
+
+std::vector<Block::StartingPoint> FreezeBlock::startingPoints() const
+{
+    const char* holdTip = "Right-click Hold and choose MIDI learn to put it on a footswitch.";
+    return {
+        { "Saturn's Ring (calm pad)",
+          "A slow, soft swell with a quiet octave shimmer that fades out gently. " + juce::String (holdTip),
+          { { "mode", 0 }, { "source", 0 }, { "pitch", 0 }, { "volume", 85 }, { "fadeIn", 3500 }, { "fadeOut", 8000 },
+            { "tone", 4500 }, { "dry", 100 }, { "set", 1 }, { "shimmer", 32 }, { "mod", 18 }, { "width", 125 }, { "seqOn", 0 } } },
+        { "Classic freeze",
+          "Holds exactly what you played, quickly. " + juce::String (holdTip),
+          { { "mode", 0 }, { "source", 0 }, { "pitch", 0 }, { "volume", 100 }, { "fadeIn", 120 }, { "fadeOut", 1500 },
+            { "tone", 9000 }, { "set", 1 }, { "shimmer", 0 }, { "mod", 0 }, { "width", 100 }, { "seqOn", 0 } } },
+        { "Building infinite pad",
+          "Keeps adding what you play while held, like a Night Sky style infinite pad.",
+          { { "mode", 1 }, { "source", 0 }, { "volume", 80 }, { "fadeIn", 1500 }, { "fadeOut", 6000 }, { "tone", 6000 },
+            { "shimmer", 20 }, { "mod", 30 }, { "width", 130 }, { "seqOn", 0 } } },
+        { "Pulsing octaves (sequencer)",
+          "Eighth-note steps between root, octave and fifth, in time with the tempo.",
+          { { "mode", 0 }, { "fadeIn", 200 }, { "fadeOut", 2500 }, { "tone", 7000 }, { "seqOn", 1 }, { "seqSteps", 0 }, { "seqRate", 3 },
+            { "seqGlide", 0 }, { "seqRun", 0 },
+            { "sp0", 0 }, { "sp1", 12 }, { "sp2", 7 }, { "sp3", 12 }, { "sp4", 0 }, { "sp5", 12 }, { "sp6", 5 }, { "sp7", 7 },
+            { "sv0", 100 }, { "sv1", 70 }, { "sv2", 85 }, { "sv3", 60 }, { "sv4", 100 }, { "sv5", 70 }, { "sv6", 85 }, { "sv7", 60 } } },
+    };
+}
+
+void FreezeBlock::advanceSequencer (int n)
+{
+    static const float beatsPerStep[] = { 2.0f, 1.0f, 0.75f, 0.5f, 1.0f / 3.0f, 0.25f };
+    auto& ctx = context();
+    const int steps = (int) p (fSeqSteps) == 1 ? 16 : 8;
+    const float bps = beatsPerStep[juce::jlimit (0, 5, (int) p (fSeqRate))];
+    const bool followTransport = (int) p (fSeqRun) == 1;
+    bool run;
+    if (followTransport)
+    {
+        run = ctx.running.load();
+        if (ctx.starts.load() != seqStarts) { seqStarts = ctx.starts.load(); seqPos = 0; seqStep = -1; }
+        const double hb = ctx.hostBeats.load();
+        if (hb >= 0.0) seqPos = hb / bps;   // inside Logic: locked to the song position
+    }
+    else
+    {
+        run = holding;
+        if (holding && ! seqWasRunning) { seqPos = 0; seqStep = -1; }   // every hold starts on step 1
+    }
+    seqWasRunning = run;
+    if (! run) { seqGainTarget = 1.0f; return; }
+    const int step = (int) std::fmod (std::floor (seqPos), (double) steps);
+    if (step != seqStep)
+    {
+        seqStep = step;
+        seqSemiTarget = p (fStepPitch0 + step);
+        seqGainTarget = p (fStepLevel0 + step) * 0.01f;
+    }
+    seqPos += (double) n / sampleRate * (ctx.bpm.load() / 60.0) / bps;
 }
 
 //==============================================================================

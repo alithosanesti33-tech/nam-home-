@@ -324,6 +324,7 @@ class SaxBlock : public Block
 {
 public:
     SaxBlock();
+    std::vector<StartingPoint> startingPoints() const override;
     juce::String getTitle() const override;
     juce::String getSubtitle() const override;
     void setModel (int m);   // also sets that horn's usual octave
@@ -528,6 +529,7 @@ class FreezeBlock : public Block
 public:
     FreezeBlock();
     bool hasTails() const override { return true; }
+    std::vector<StartingPoint> startingPoints() const override;
 protected:
     void prepare (double sr, int maxBlock) override;
     void reset() override;
@@ -542,6 +544,15 @@ private:
     bool holding = false, haveFrozen = false;
     float level = 0, lastNoteSet = -1;
     juce::Random rng;
+    // sound shaping
+    float modPh = 0, shimmerSm = 0;
+    // step sequencer: steps change the pitch (with glide) and volume of the frozen sound
+    ndsp::PitchShifter seqShift[2];
+    double seqPos = 0;        // in steps
+    int seqStarts = -1, seqStep = -1;
+    bool seqWasRunning = false;
+    float seqSemi = 0, seqGain = 1, seqGainTarget = 1, seqSemiTarget = 0;
+    void advanceSequencer (int n);
 };
 
 // Tremolo: optical-style sine, triangle, choppy square, or harmonic (Brownface-style band split).

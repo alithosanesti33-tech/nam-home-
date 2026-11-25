@@ -283,7 +283,15 @@ void NAMHomeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     if (isPlugin())
         if (auto* ph = getPlayHead())
             if (auto pos = ph->getPosition())
+            {
                 if (auto bpm = pos->getBpm()) engine.setBpm ((float) *bpm);
+                auto& ctx = Block::context();
+                const bool playing = pos->getIsPlaying();
+                if (playing && ! ctx.running.load()) ++ctx.starts;
+                ctx.running = playing;
+                const auto ppq = pos->getPpqPosition();
+                ctx.hostBeats = (playing && ppq) ? *ppq : -1.0;
+            }
     engine.process (buffer, getTotalNumInputChannels(), midi);
 }
 
