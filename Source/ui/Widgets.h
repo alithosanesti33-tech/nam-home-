@@ -4,6 +4,9 @@
 
 class NAMHomeProcessor;
 
+// Right-click menu for MIDI learn on any control (knob, switch, choice).
+void showMidiLearnMenu (juce::Component& target, NAMHomeProcessor& proc, Block& block, int paramIndex, std::function<void()> resetToDefault);
+
 // A knob bound to a block parameter. Right-click for MIDI learn; double-click resets.
 class ParamKnob : public juce::Component, public juce::SettableTooltipClient
 {
@@ -37,6 +40,8 @@ public:
 private:
     juce::Array<juce::Rectangle<int>> layout (int width) const;
     NAMHomeProcessor& proc;
+    Block& block;
+    int index;
     Param& prm;
     juce::Colour colour;
     int hoverIdx = -1;
@@ -48,10 +53,13 @@ class ParamCombo : public juce::Component
 public:
     ParamCombo (NAMHomeProcessor& p, Block& b, int paramIndex);
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
     void sync();
     std::function<void()> onChange;
 private:
     NAMHomeProcessor& proc;
+    Block& block;
+    int index;
     Param& prm;
     juce::Label name;
     juce::ComboBox box;
@@ -63,9 +71,12 @@ class ParamSwitch : public juce::ToggleButton
 public:
     ParamSwitch (NAMHomeProcessor& p, Block& b, int paramIndex);
     void sync() { setToggleState (prm.on(), juce::dontSendNotification); }
+    void mouseDown (const juce::MouseEvent&) override;
     std::function<void()> onChange;
 private:
     NAMHomeProcessor& proc;
+    Block& block;
+    int index;
     Param& prm;
 };
 

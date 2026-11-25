@@ -65,26 +65,35 @@ void ParamKnob::paint (Graphics& g)
     }
 }
 
+void showMidiLearnMenu (Component& target, NAMHomeProcessor& proc, Block& block, int index, std::function<void()> resetToDefault)
+{
+    PopupMenu m;
+    auto& prm = *block.params[(size_t) index];
+    m.addSectionHeader (prm.name);
+    const auto current = proc.engine.describeMapping (block.id, index);
+    m.addItem (1, current.isEmpty() ? "MIDI learn (move a pedal, knob or press a footswitch)" : "MIDI learn again (now " + current + ")");
+    m.addItem (2, "Clear MIDI", current.isNotEmpty());
+    m.addItem (3, "Reset to default", resetToDefault != nullptr);
+    Component::SafePointer<Component> safe (&target);
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&target), [&proc, &block, index, resetToDefault, safe] (int r)
+    {
+        if (r == 1) { proc.engine.armLearn (block.id, index); if (proc.onNotice) proc.onNotice ("Move or press the control on your MIDI device now..."); }
+        if (r == 2) proc.engine.clearMappingsFor (block.id, index);
+        if (r == 3 && resetToDefault) resetToDefault();
+        if (safe != nullptr) safe->repaint();
+    });
+}
+
 void ParamKnob::mouseDown (const MouseEvent& e)
 {
     if (! e.mods.isPopupMenu()) return;
-    PopupMenu m;
-    m.addSectionHeader (prm.name);
-    const auto current = proc.engine.describeMapping (block.id, index);
-    m.addItem (1, current.isEmpty() ? "MIDI learn (move a pedal or knob)" : "MIDI learn again (now " + current + ")");
-    m.addItem (2, "Clear MIDI", current.isNotEmpty());
-    m.addItem (3, "Reset to default");
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (this), [this] (int r)
-    {
-        if (r == 1) { proc.engine.armLearn (block.id, index); if (proc.onNotice) proc.onNotice ("Move the control on your MIDI device now..."); }
-        if (r == 2) { proc.engine.clearMappingsFor (block.id, index); midiText = {}; repaint(); }
-        if (r == 3) slider.setValue (prm.def);
-    });
+    showMidiLearnMenu (*this, proc, block, index, [this] { slider.setValue (prm.def); });
+    midiText = proc.engine.describeMapping (block.id, index);
 }
 
 //==============================================================================
 ParamSegments::ParamSegments (NAMHomeProcessor& p, Block& b, int i, Colour c)
-    : proc (p), prm (*b.params[(size_t) i]), colour (c) {}
+    : proc (p), block (b), index (i), prm (*b.params[(size_t) i]), colour (c) {}
 
 Array<Rectangle<int>> ParamSegments::layout (int width) const
 {
@@ -123,6 +132,7 @@ void ParamSegments::paint (Graphics& g)
 
 void ParamSegments::mouseDown (const MouseEvent& e)
 {
+    if (e.mods.isPopupMenu()) { showMidiLearnMenu (*this, proc, block, index, [this] { prm.set (prm.def); repaint(); if (onChange) onChange(); }); return; }
     const auto l = layout (getWidth());
     for (int i = 0; i < l.size(); ++i)
         if (l[i].contains (e.getPosition()))
@@ -135,8 +145,9 @@ void ParamSegments::mouseDown (const MouseEvent& e)
 }
 
 //==============================================================================
-ParamCombo::ParamCombo (NAMHomeProcessor& p, Block& b, int i) : proc (p), prm (*b.params[(size_t) i])
+ParamCombo::ParamCombo (NAMHomeProcessor& p, Block& b, int i) : proc (p), block (b), index (i), prm (*b.params[(size_t) i])
 {
+    name.addMouseListener (this, false);
     name.setText (prm.name, dontSendNotification);
     name.setFont (theme::font (12.0f, 1));
     name.setColour (Label::textColourId, theme::muted);
@@ -160,13 +171,24 @@ void ParamCombo::resized()
     box.setBounds (r.withSizeKeepingCentre (r.getWidth(), 30));
 }
 
+void ParamCombo::mouseDown (const MouseEvent& e)
+{
+    if (e.mods.isPopupMenu()) showMidiLearnMenu (*this, proc, block, index, [this] { prm.set (prm.def); sync(); if (onChange) onChange(); });
+}
+
 void ParamCombo::sync()
 {
     if (box.getSelectedItemIndex() != prm.getInt()) box.setSelectedItemIndex (prm.getInt(), dontSendNotification);
 }
 
 //==============================================================================
-ParamSwitch::ParamSwitch (NAMHomeProcessor& p, Block& b, int i) : ToggleButton (b.params[(size_t) i]->name), proc (p), prm (*b.params[(size_t) i])
+void ParamSwitch::mouseDown (const MouseEvent& e)
+{
+    if (e.mods.isPopupMenu()) { showMidiLearnMenu (*this, proc, block, index, [this] { prm.set (prm.def); sync(); if (onChange) onChange(); }); return; }
+    ToggleButton::mouseDown (e);
+}
+
+ParamSwitch::ParamSwitch (NAMHomeProcessor& p, Block& b, int i) : ToggleButton (b.params[(size_t) i]->name), proc (p), block (b), index (i), prm (*b.params[(size_t) i])
 {
     setToggleState (prm.on(), dontSendNotification);
     onClick = [this]

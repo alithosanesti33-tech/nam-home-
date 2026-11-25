@@ -122,7 +122,9 @@ void Engine::armLearn (int blockId, int param)
 {
     learnBlock = blockId;
     learnParam = param;
-    learnedCc = -1;
+    learnStage = 0;
+    learnSawRelease = false;
+    learnFirstSeen = 0;
     learnArmed = true;
 }
 
@@ -133,24 +135,63 @@ void Engine::clearMappingsFor (int blockId, int param)
         if (m.blockId == blockId && m.param == param) m = {};
 }
 
+static juce::String midiName (int kind, int num)
+{
+    switch (kind)
+    {
+        case Engine::kindCC:      return "CC " + juce::String (num);
+        case Engine::kindNote:    return "Note " + juce::MidiMessage::getMidiNoteName (num, true, true, 4);
+        case Engine::kindProgram: return "Program " + juce::String (num + 1);
+        default: break;
+    }
+    return {};
+}
+
 juce::String Engine::describeMapping (int blockId, int param) const
 {
     for (auto& m : mappings)
-        if (m.cc >= 0 && m.blockId == blockId && m.param == param) return "CC " + juce::String (m.cc);
+        if (m.kind >= 0 && m.blockId == blockId && m.param == param)
+            return midiName (m.kind, m.number) + (m.toggle ? " (toggle)" : "");
     return {};
+}
+
+juce::String Engine::lastMidiText() const
+{
+    const int k = lastKind.load();
+    if (k < 0) return "none yet";
+    juce::String s = midiName (k, lastNum.load());
+    if (k != kindProgram) s << " = " << lastVal.load();
+    s << "  (channel " << lastChannel.load() << ")";
+    return s;
 }
 
 void Engine::pollMessageThread()
 {
-    const int cc = learnedCc.exchange (-1);
-    if (cc >= 0 && learnArmed.load())
+    if (learnArmed.load() && learnStage.load() == 1)
     {
-        const juce::SpinLock::ScopedLockType sl (lock);
-        for (auto& m : mappings)   // one control per CC target: replace an existing mapping of this control
-            if (m.blockId == learnBlock.load() && m.param == learnParam.load()) m = {};
-        for (auto& m : mappings)
-            if (m.cc < 0) { m.cc = cc; m.blockId = learnBlock.load(); m.param = learnParam.load(); break; }
-        learnArmed = false;
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (learnFirstSeen == 0) learnFirstSeen = now;
+        else if (now - learnFirstSeen > 650.0)   // wait briefly to see whether a switch also sends a release
+        {
+            const int kind = learnedKind.load(), num = learnedNum.load();
+            const int bid = learnBlock.load(), prm = learnParam.load();
+            bool switchTarget = prm < 0 || bid == -1;
+            if (! switchTarget)
+                if (auto b = findById (bid))
+                    if (prm < (int) b->params.size()) switchTarget = b->params[(size_t) prm]->kind != Param::Kind::Float;
+            const bool momentary = learnSawRelease.load() || kind == kindProgram;
+            Mapping nm;
+            nm.kind = kind; nm.number = num; nm.blockId = bid; nm.param = prm;
+            // a momentary switch toggles on each press; a latching switch or a pedal/knob follows its value
+            nm.toggle = (momentary && (switchTarget || kind == kindProgram || kind == kindNote)) ? 1 : 0;
+            {
+                const juce::SpinLock::ScopedLockType sl (lock);
+                for (auto& m : mappings) if (m.blockId == bid && m.param == prm) m = {};
+                for (auto& m : mappings) if (m.kind < 0) { m = nm; break; }
+            }
+            learnStage = 0;
+            learnArmed = false;
+        }
     }
     if (tapFromMidi.exchange (false)) tapTempo();
     for (auto& row : cells)
@@ -158,31 +199,67 @@ void Engine::pollMessageThread()
             if (auto* cab = dynamic_cast<CabBlock*> (b.get())) cab->updateAlignment();
 }
 
+void Engine::applyMapping (const Mapping& m, int value, bool press, const Plan& plan)
+{
+    if (m.blockId == -1) { if (press) tapFromMidi = true; return; }
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c)
+        {
+            Block* b = plan.cell[r][c];
+            if (b == nullptr || b->id != m.blockId) continue;
+            if (m.param < 0)
+            {
+                if (m.toggle) { if (press) b->enabled = ! b->enabled.load(); }
+                else b->enabled = value >= 64;
+                return;
+            }
+            if (m.param >= (int) b->params.size()) return;
+            auto& prm = *b->params[(size_t) m.param];
+            if (m.toggle)
+            {
+                if (! press) return;
+                if (prm.kind == Param::Kind::Toggle) prm.set (prm.on() ? 0.0f : 1.0f);
+                else if (prm.kind == Param::Kind::Choice) prm.set ((float) ((prm.getInt() + 1) % juce::jmax (1, prm.choices.size())));
+                else prm.setNorm (prm.getNorm() > 0.5f ? 0.0f : 1.0f);
+            }
+            else if (prm.kind == Param::Kind::Toggle) prm.set (value >= 64 ? 1.0f : 0.0f);
+            else prm.setNorm ((float) value / 127.0f);
+            return;
+        }
+}
+
 void Engine::handleMidi (juce::MidiBuffer& midi, const Plan& plan)
 {
     for (const auto meta : midi)
     {
         const auto msg = meta.getMessage();
-        if (msg.isProgramChange()) { pendingProgram = msg.getProgramChangeNumber(); continue; }
-        if (! msg.isController()) continue;
-        const int cc = msg.getControllerNumber();
-        const int val = msg.getControllerValue();
-        lastCc = cc;
-        if (learnArmed.load()) { learnedCc = cc; continue; }
+        int kind = -1, num = 0, val = 0;
+        if (msg.isController()) { kind = kindCC; num = msg.getControllerNumber(); val = msg.getControllerValue(); }
+        else if (msg.isNoteOn()) { kind = kindNote; num = msg.getNoteNumber(); val = juce::jmax (64, (int) msg.getVelocity()); }
+        else if (msg.isNoteOff()) { kind = kindNote; num = msg.getNoteNumber(); val = 0; }
+        else if (msg.isProgramChange()) { kind = kindProgram; num = msg.getProgramChangeNumber(); val = 127; }
+        if (kind < 0) continue;
 
-        for (auto& m : mappings)
+        lastKind = kind; lastNum = num; lastVal = val; lastChannel = msg.getChannel();
+        if (kind == kindCC) lastCc = num;
+
+        if (learnArmed.load())
         {
-            if (m.cc != cc) continue;
-            if (m.blockId == -1) { if (val >= 64) tapFromMidi = true; continue; }
-            for (int r = 0; r < rows; ++r)
-                for (int c = 0; c < cols; ++c)
-                {
-                    Block* b = plan.cell[r][c];
-                    if (b == nullptr || b->id != m.blockId) continue;
-                    if (m.param < 0) b->enabled = val >= 64;
-                    else if (m.param < (int) b->params.size()) b->params[(size_t) m.param]->setNorm ((float) val / 127.0f);
-                }
+            if (learnStage.load() == 0)
+            {
+                learnedKind = kind; learnedNum = num;
+                learnSawRelease = false;
+                learnStage = 1;
+            }
+            else if (learnedKind.load() == kind && learnedNum.load() == num && val < 64)
+                learnSawRelease = true;
+            continue;
         }
+
+        bool used = false;
+        for (auto& m : mappings)
+            if (m.kind == kind && m.number == num) { applyMapping (m, val, val >= 64, plan); used = true; }
+        if (kind == kindProgram && ! used) pendingProgram = num;   // unlearned program changes switch presets
     }
 }
 
@@ -396,10 +473,12 @@ juce::var Engine::toVar() const
 
     juce::Array<juce::var> maps;
     for (auto& m : mappings)
-        if (m.cc >= 0)
+        if (m.kind >= 0)
         {
             auto* mo = new juce::DynamicObject();
-            mo->setProperty ("cc", m.cc);
+            mo->setProperty ("kind", m.kind);
+            mo->setProperty ("number", m.number);
+            mo->setProperty ("toggle", m.toggle);
             mo->setProperty ("block", m.blockId);
             mo->setProperty ("param", m.param);
             maps.add (juce::var (mo));
@@ -454,7 +533,13 @@ void Engine::fromVar (const juce::var& v)
                 if (k >= maxMappings) break;
                 int bid = (int) mv.getProperty ("block", 0);
                 if (bid > 0) { auto it = idMap.find (bid); if (it == idMap.end()) continue; bid = it->second; }
-                mappings[(size_t) k++] = { (int) mv.getProperty ("cc", -1), bid, (int) mv.getProperty ("param", 0) };
+                Mapping m;
+                if (mv.hasProperty ("kind")) { m.kind = (int) mv.getProperty ("kind", -1); m.number = (int) mv.getProperty ("number", 0); }
+                else { m.kind = (int) mv.getProperty ("cc", -1) >= 0 ? kindCC : -1; m.number = (int) mv.getProperty ("cc", 0); }   // older presets
+                m.blockId = bid;
+                m.param = (int) mv.getProperty ("param", 0);
+                m.toggle = (int) mv.getProperty ("toggle", 0);
+                mappings[(size_t) k++] = m;
             }
         }
     }

@@ -257,11 +257,12 @@ SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : pro
     // ---- MIDI
     midiPage.addAndMakeVisible (styleLabel (midiInfo,
         "MIDI devices are switched on automatically when they connect.\n"
-        "To control a block, right-click a knob or a block and choose MIDI learn, then move your pedal or press a switch.\n"
-        "Program change messages switch presets in alphabetical order (program 1 = first preset).\n\n"
+        "To control something, right-click any knob, switch, choice or block and choose MIDI learn, then move your pedal or press a footswitch. "
+        "CC, Note and Program Change messages all work; footswitches are detected as momentary or latching automatically.\n"
+        "Program changes you haven't learned to a control switch presets in alphabetical order (program 1 = first preset).\n\n"
         "BOSS EV-1-WL: set the pedal to send one CC with the toe switch on and another with it off (in the BOSS app). "
         "Learn the wah position to the first, the volume position to the second, and learn the toe switch to the wah's on/off."));
-    midiPage.addAndMakeVisible (styleLabel (lastCcLabel, "Last controller received: none", 13.0f, theme::text));
+    midiPage.addAndMakeVisible (styleLabel (lastCcLabel, "Last MIDI received: none yet", 13.0f, theme::text));
     bluetoothBtn.onClick = []
     {
         if (BluetoothMidiDevicePairingDialogue::isAvailable()) BluetoothMidiDevicePairingDialogue::open();
@@ -355,8 +356,7 @@ void SettingsSheet::timerCallback()
     StringArray now;
     for (auto& d : MidiInput::getAvailableDevices()) now.add (d.identifier);
     if (now != lastMidiDevices) buildMidiList();
-    const int cc = proc.engine.lastCc.load();
-    lastCcLabel.setText (cc < 0 ? String ("Last controller received: none") : "Last controller received: CC " + String (cc), dontSendNotification);
+    lastCcLabel.setText ("Last MIDI received: " + proc.engine.lastMidiText(), dontSendNotification);
     t3kStatus.setText (proc.tone3000->getClientId().isEmpty() ? "Not set up yet"
                        : proc.tone3000->isSignedIn() ? "Key saved · signed in" : "Key saved · you'll sign in the first time you browse", dontSendNotification);
     t3kStatus.setFont (theme::font (13.0f, 1));

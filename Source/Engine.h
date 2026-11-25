@@ -68,14 +68,23 @@ public:
     double getCpuLoad() const { return loadMeasurer.getLoadAsProportion(); }
 
     // ---- MIDI learn
-    struct Mapping { int cc = -1; int blockId = 0; int param = 0; };  // param -1 = on/off; blockId -1 = tap tempo
-    static constexpr int maxMappings = 64;
-    void armLearn (int blockId, int param);   // next CC that arrives gets mapped here
-    void cancelLearn() { learnArmed = false; }
+    // Any CC, Note or Program Change can be learned (footswitches like the M-Vave Chocolate often send
+    // Program Change or Notes). Switches are detected as momentary (press + release) or latching.
+    enum MidiKind { kindCC = 0, kindNote = 1, kindProgram = 2 };
+    struct Mapping
+    {
+        int kind = -1, number = 0;   // kind -1 = unused
+        int blockId = 0, param = 0;  // param -1 = on/off; blockId -1 = tap tempo
+        int toggle = 0;              // 1 = each press toggles / steps; 0 = follow the value
+    };
+    static constexpr int maxMappings = 128;
+    void armLearn (int blockId, int param);   // next MIDI message that arrives gets mapped here
+    void cancelLearn() { learnArmed = false; learnStage = 0; }
     bool isLearning() const { return learnArmed.load(); }
     void clearMappingsFor (int blockId, int param);
     juce::String describeMapping (int blockId, int param) const;
-    std::atomic<int> lastCc { -1 }, pendingProgram { -1 };
+    juce::String lastMidiText() const;
+    std::atomic<int> lastKind { -1 }, lastNum { 0 }, lastVal { 0 }, lastChannel { 0 }, lastCc { -1 }, pendingProgram { -1 };
     std::atomic<bool> tapFromMidi { false };
     void pollMessageThread();                // timer: finishes learn, MIDI taps
 
@@ -100,7 +109,11 @@ private:
 
     std::array<Mapping, maxMappings> mappings;
     std::atomic<bool> learnArmed { false };
-    std::atomic<int> learnBlock { 0 }, learnParam { 0 }, learnedCc { -1 };
+    std::atomic<int> learnBlock { 0 }, learnParam { 0 };
+    std::atomic<int> learnStage { 0 }, learnedKind { -1 }, learnedNum { 0 };
+    std::atomic<bool> learnSawRelease { false };
+    double learnFirstSeen = 0;
+    void applyMapping (const Mapping& m, int value, bool press, const Plan& plan);
 
     double sampleRate = 48000.0;
     int maxBlock = 512;
