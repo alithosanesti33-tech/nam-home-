@@ -140,8 +140,35 @@ juce::var Block::toVar() const
     return juce::var (o);
 }
 
-std::unique_ptr<Block> Block::fromVar (const juce::var& v)
+// The old all-in-one "Modulation" block was replaced by dedicated blocks; old presets load into
+// the matching new block with their settings carried over.
+static juce::var migrateModulation (const juce::var& v)
 {
+    auto* ps = v.getProperty ("params", {}).getDynamicObject();
+    auto get = [ps] (const char* id, float def) { return ps != nullptr && ps->hasProperty (id) ? (float) ps->getProperty (id) : def; };
+    const int kind = (int) get ("type", 0);
+    auto* np = new juce::DynamicObject();
+    juce::String newType;
+    switch (kind)
+    {
+        case 0: newType = "Chorus"; np->setProperty ("type", 0); np->setProperty ("rate", get ("rate", 0.8f)); np->setProperty ("depth", get ("depth", 50)); np->setProperty ("mix", get ("mix", 50)); np->setProperty ("width", get ("width", 70)); np->setProperty ("killDry", get ("killDry", 0)); break;
+        case 1: newType = "Flanger"; np->setProperty ("type", 0); np->setProperty ("rate", get ("rate", 0.25f)); np->setProperty ("depth", get ("depth", 50)); np->setProperty ("feedback", get ("feedback", 0)); np->setProperty ("mix", get ("mix", 50)); np->setProperty ("killDry", get ("killDry", 0)); break;
+        case 2: newType = "Phaser"; np->setProperty ("type", 2); np->setProperty ("rate", get ("rate", 0.5f)); np->setProperty ("depth", get ("depth", 50)); np->setProperty ("feedback", std::abs (get ("feedback", 0))); np->setProperty ("stages", get ("stages", 0)); np->setProperty ("width", get ("width", 70)); np->setProperty ("mix", get ("mix", 50)); break;
+        case 3: newType = "Tremolo"; np->setProperty ("rate", get ("rate", 4)); np->setProperty ("sync", get ("sync", 0)); np->setProperty ("depth", get ("depth", 50)); np->setProperty ("wave", get ("wave", 0)); np->setProperty ("width", get ("width", 0)); break;
+        case 4: newType = "Vibrato"; np->setProperty ("rate", get ("rate", 5)); np->setProperty ("sync", get ("sync", 0)); np->setProperty ("depth", get ("depth", 50)); break;
+        case 5: newType = "Rotary"; np->setProperty ("fast", get ("speed", 0)); break;
+        default: newType = "Vibe"; np->setProperty ("rate", get ("rate", 2)); np->setProperty ("sync", get ("sync", 0)); np->setProperty ("depth", get ("depth", 70)); np->setProperty ("mode", get ("mix", 50) >= 90 ? 1 : 0); break;
+    }
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("type", newType);
+    o->setProperty ("enabled", v.getProperty ("enabled", true));
+    o->setProperty ("params", juce::var (np));
+    return juce::var (o);
+}
+
+std::unique_ptr<Block> Block::fromVar (const juce::var& vIn)
+{
+    const juce::var v = vIn.getProperty ("type", {}).toString() == "Modulation" ? migrateModulation (vIn) : vIn;
     const auto tn = v.getProperty ("type", {}).toString();
     for (auto t : allTypes())
     {
@@ -181,7 +208,6 @@ juce::String Block::typeName (Type t)
         case Type::ParametricEQ: return "Parametric EQ";
         case Type::Delay:        return "Delay";
         case Type::Reverb:       return "Reverb";
-        case Type::Modulation:   return "Modulation";
         case Type::TriChorus:    return "Tri-Chorus";
         case Type::Utility:      return "Utility";
         case Type::PhatTrack:    return "PhatTrack";
@@ -198,6 +224,10 @@ juce::String Block::typeName (Type t)
         case Type::Fuzz:         return "Fuzz";
         case Type::ATDrive:      return "@ Drive";
         case Type::Freeze:       return "Freeze";
+        case Type::Tremolo:      return "Tremolo";
+        case Type::Vibrato:      return "Vibrato";
+        case Type::Rotary:       return "Rotary";
+        case Type::Vibe:         return "Vibe";
         case Type::NumTypes:     break;
     }
     return {};
@@ -254,7 +284,6 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::ParametricEQ: return std::make_unique<ParametricEQBlock>();
         case Type::Delay:        return std::make_unique<DelayBlock>();
         case Type::Reverb:       return std::make_unique<ReverbBlock>();
-        case Type::Modulation:   return std::make_unique<ModulationBlock>();
         case Type::TriChorus:    return std::make_unique<TriChorusBlock>();
         case Type::Utility:      return std::make_unique<UtilityBlock>();
         case Type::PhatTrack:    return std::make_unique<PhatTrackBlock>();
@@ -271,6 +300,10 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Fuzz:         return std::make_unique<FuzzBlock>();
         case Type::ATDrive:      return std::make_unique<ATDriveBlock>();
         case Type::Freeze:       return std::make_unique<FreezeBlock>();
+        case Type::Tremolo:      return std::make_unique<TremoloBlock>();
+        case Type::Vibrato:      return std::make_unique<VibratoBlock>();
+        case Type::Rotary:       return std::make_unique<RotaryBlock>();
+        case Type::Vibe:         return std::make_unique<VibeBlock>();
         case Type::NumTypes:     break;
     }
     return nullptr;

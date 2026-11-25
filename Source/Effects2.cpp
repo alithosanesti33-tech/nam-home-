@@ -299,84 +299,151 @@ void WhammyBlock::process (float* L, float* R, int n)
 }
 
 //==============================================================================
-// Polyphonic octave (POG style): a bank of complex resonators splits the guitar into narrow
-// bands; in each band, doubling the phase gives the octave up and halving it gives the octave
-// down. No pitch detection, so chords work, and nothing is buffered, so it plays with no delay.
+// Polyphonic octave (Micro POG / POG2 style). The guitar is analysed in short overlapping
+// FFT frames; every partial is moved to 2x / 4x (up) or 1/2x / 1/4x (down) its exact measured
+// frequency with its phase kept coherent (phase-locked vocoder), so single notes come out as
+// chords stay chords. "Single notes" uses pitch-synchronous shifters: the cleanest octaves on
+// single notes (and the least delay), like playing a POG one note at a time.
 OctaveBlock::OctaveBlock() : Block (Type::Octave)
 {
+    addChoice ("mode", "Mode", { "Micro POG", "POG2" }, 0);
     addFloat ("dry", "Dry", 0, 100, 100, "%", -1, 1);
     addFloat ("sub", "Sub octave", 0, 100, 0, "%", -1, 1);
     addFloat ("up", "Octave up", 0, 100, 60, "%", -1, 1);
+    auto& sub2 = addFloat ("sub2", "2 octaves down", 0, 100, 0, "%", -1, 1);
+    auto& up2 = addFloat ("up2", "2 octaves up", 0, 100, 0, "%", -1, 1);
+    auto& det = addFloat ("detune", "Detune", 0, 100, 0, "%", -1, 1);
+    auto& atk = addFloat ("attack", "Attack", 0, 100, 0, "%", -1, 1);
     addFloat ("filter", "Filter", 300, 12000, 12000, "Hz", 2500, 1);
+    auto& fq = addFloat ("filterQ", "Filter resonance", 0, 100, 0, "%", -1, 1);
+    addChoice ("engine", "Tracking", { "Single notes (cleanest)", "Chords (polyphonic)" }, 0);
+    auto pog2 = [] (const Block& b) { return b.params[0]->getInt() == 1; };
+    sub2.visible = up2.visible = det.visible = atk.visible = fq.visible = pog2;
 }
 
 void OctaveBlock::prepare (double sr, int)
 {
-    const float lo = 70.0f, hi = 5600.0f;
-    for (int k = 0; k < bands; ++k)
-    {
-        const float f = lo * std::pow (hi / lo, (float) k / (float) (bands - 1));
-        bandFreq[k] = f;
-        const float bw = f * 0.20f;
-        const float r = std::exp (-pi * bw / (float) sr);
-        band[k].cr = r * std::cos (twoPi * f / (float) sr);
-        band[k].ci = r * std::sin (twoPi * f / (float) sr);
-        band[k].gain = 1.0f - r;
-    }
-    hp.set (Biquad::Type::HighPass, (float) sr, 60.0f, 0.7f);
-    subLp.set (Biquad::Type::LowPass, (float) sr, 2500.0f, 0.6f);
+    fft = std::make_unique<juce::dsp::FFT> (order);
+    inRing.assign (N, 0.0f); outAcc.assign (N * 2, 0.0f); buf.assign (N * 2, 0.0f);
+    window.resize (N);
+    for (int i = 0; i < N; ++i) window[(size_t) i] = 0.5f - 0.5f * std::cos (twoPi * (float) i / (float) N);
+    lastPhase.assign (N / 2 + 1, 0.0f); mag.assign (N / 2 + 1, 0.0f); freq.assign (N / 2 + 1, 0.0f);
+    outRe.assign (N / 2 + 1, 0.0f); outIm.assign (N / 2 + 1, 0.0f);
+    for (auto& v : synPhase) v.assign (N / 2 + 1, 0.0f);
+    for (auto& f : fast) f.prepare ((float) sr, 0.030f, 0.25f);
+    hp.set (Biquad::Type::HighPass, (float) sr, 35.0f, 0.7f);
     reset();
 }
 
 void OctaveBlock::reset()
 {
-    for (auto& b : band) { b.zr = b.zi = 0; b.lastPh = 0; b.unwrapped = 0; b.env = 0; }
-    lp.reset(); hp.reset(); subLp.reset();
+    std::fill (inRing.begin(), inRing.end(), 0.0f); std::fill (outAcc.begin(), outAcc.end(), 0.0f);
+    std::fill (lastPhase.begin(), lastPhase.end(), 0.0f);
+    for (auto& v : synPhase) std::fill (v.begin(), v.end(), 0.0f);
+    for (auto& f : fast) f.clear();
+    inPos = hopCount = outPos = 0; lp.reset(); hp.reset();
+    fastEnv = slowEnv = 0; attackGain = 1; lastFilter = -1;
+}
+
+void OctaveBlock::spectralFrame (const float ratios[voices], const float gains[voices])
+{
+    const int half = N / 2;
+    for (int i = 0; i < N; ++i) buf[(size_t) i] = inRing[(size_t) ((inPos + i) % N)] * window[(size_t) i];
+    std::fill (buf.begin() + N, buf.end(), 0.0f);
+    fft->performRealOnlyForwardTransform (buf.data(), true);
+    const float expect = twoPi * (float) hop / (float) N;
+    for (int k = 0; k <= half; ++k)
+    {
+        const float re = buf[(size_t) (2 * k)], im = buf[(size_t) (2 * k + 1)];
+        mag[(size_t) k] = std::sqrt (re * re + im * im);
+        const float ph = std::atan2 (im, re);
+        float d = ph - lastPhase[(size_t) k] - expect * (float) k;
+        d = std::remainder (d, twoPi);
+        lastPhase[(size_t) k] = ph;
+        freq[(size_t) k] = (float) k + d / expect;           // exact frequency, in bins
+    }
+    std::fill (outRe.begin(), outRe.end(), 0.0f); std::fill (outIm.begin(), outIm.end(), 0.0f);
+    for (int v = 0; v < voices; ++v)
+    {
+        if (gains[v] <= 0.0f) continue;
+        const float r = ratios[v];
+        auto& sp = synPhase[v];
+        // peaks carry the phase; the bins around a peak keep their offset to it (identity phase locking)
+        int k = 1;
+        while (k < half)
+        {
+            if (! (mag[(size_t) k] > mag[(size_t) (k - 1)] && mag[(size_t) k] >= mag[(size_t) (k + 1)])) { ++k; continue; }
+            const int peak = k;
+            int lo = peak, hi = peak;
+            while (lo > 1 && mag[(size_t) (lo - 1)] < mag[(size_t) lo]) --lo;
+            while (hi < half - 1 && mag[(size_t) (hi + 1)] < mag[(size_t) hi]) ++hi;
+            const float target = freq[(size_t) peak] * r;
+            const int tp = (int) std::lround (target);
+            if (tp >= 1 && tp < half)
+            {
+                sp[(size_t) tp] = std::remainder (sp[(size_t) tp] + expect * target, twoPi);
+                const float basePh = sp[(size_t) tp];
+                for (int j = lo; j <= hi; ++j)
+                {
+                    const int tj = tp + (int) std::lround ((float) (j - peak) * std::min (1.0f, r));
+                    if (tj < 1 || tj >= half) continue;
+                    const float ph = basePh + (lastPhase[(size_t) j] - lastPhase[(size_t) peak]);
+                    const float a = mag[(size_t) j] * gains[v];
+                    outRe[(size_t) tj] += a * std::cos (ph);
+                    outIm[(size_t) tj] += a * std::sin (ph);
+                }
+            }
+            k = hi + 1;
+        }
+    }
+    for (int k = 0; k <= half; ++k) { buf[(size_t) (2 * k)] = outRe[(size_t) k]; buf[(size_t) (2 * k + 1)] = outIm[(size_t) k]; }
+    fft->performRealOnlyInverseTransform (buf.data());
+    const float norm = 1.0f / 3.0f;   // Hann analysis x Hann synthesis at 8x overlap sums to 3
+    for (int i = 0; i < N; ++i)
+        outAcc[(size_t) ((outPos + i) % (2 * N))] += buf[(size_t) i] * window[(size_t) i] * norm;
 }
 
 void OctaveBlock::process (float* L, float* R, int n)
 {
-    const float dry = p (0) * 0.01f, subAmt = p (1) * 0.01f, upAmt = p (2) * 0.01f;
-    lp.set (Biquad::Type::LowPass, sampleRate, p (3), 0.65f);
-    const float envC = 1.0f - std::exp (-1.0f / (0.01f * sampleRate));
+    const bool pog2 = (int) p (0) == 1;
+    const float dry = p (1) * 0.01f;
+    const float detune = pog2 ? p (6) * 0.01f : 0.0f;
+    // voices: sub, up, 2 down, 2 up (detune spreads them a few cents, like POG2's detune)
+    const float dc = std::exp2 ((detune * 12.0f) / 1200.0f);
+    const float ratios[voices] = { 0.5f * dc, 2.0f / dc, 0.25f, 4.0f };
+    float gains[voices] = { p (2) * 0.01f, p (3) * 0.01f, pog2 ? p (4) * 0.01f : 0.0f, pog2 ? p (5) * 0.01f : 0.0f };
+    const bool fastMode = (int) p (10) == 0;   // single-note shifters: cleanest octaves, least delay
+    const float filt = p (8), fq = pog2 ? p (9) * 0.01f : 0.0f;
+    if (filt != lastFilter || fq > 0) { lp.set (Biquad::Type::LowPass, sampleRate, filt, 0.7f + fq * 5.0f); lastFilter = filt; }
+    const float attackSec = pog2 ? p (7) * 0.01f * 1.5f : 0.0f;
+    const float rise = attackSec > 0.005f ? 1.0f / (attackSec * sampleRate) : 1.0f;
+    const float fA = 1.0f - std::exp (-1.0f / (0.001f * sampleRate)), fR = 1.0f - std::exp (-1.0f / (0.02f * sampleRate));
+    const float sA = 1.0f - std::exp (-1.0f / (0.03f * sampleRate)), sR = 1.0f - std::exp (-1.0f / (0.2f * sampleRate));
     for (int i = 0; i < n; ++i)
     {
         const float x = 0.5f * (L[i] + R[i]);
-        float up = 0, sub = 0;
-        for (int k = 0; k < bands; ++k)
+        float wet = 0.0f;
+        if (fastMode)
         {
-            auto& b = band[k];
-            const float nr = b.gain * x + b.cr * b.zr - b.ci * b.zi;
-            const float ni = b.ci * b.zr + b.cr * b.zi;
-            b.zr = nr; b.zi = ni;
-            const float m2 = nr * nr + ni * ni;
-            const float m = std::sqrt (m2);
-            b.env += envC * (m - b.env);
-            if (m < 1.0e-7f) continue;
-            // octave up: z^2 / |z| keeps the level and doubles the phase
-            if (upAmt > 0) up += (nr * nr - ni * ni) / m;
-            if (subAmt > 0)
-            {
-                const float phs = std::atan2 (ni, nr);
-                float d = phs - b.lastPh;
-                if (d > pi) d -= twoPi; else if (d < -pi) d += twoPi;
-                b.lastPh = phs;
-                b.unwrapped += d;
-                if (b.unwrapped > 1.0e4f || b.unwrapped < -1.0e4f) b.unwrapped = std::fmod (b.unwrapped, 2.0f * twoPi);
-                // a band waking up takes the half-phase branch of its louder neighbour, so neighbours add
-                if (k > 0 && b.env < 0.05f * band[k - 1].env)
-                {
-                    const auto& nb = band[k - 1];
-                    float want = nb.unwrapped + std::remainder (phs - nb.lastPh, twoPi);
-                    const float diff = want - b.unwrapped;
-                    b.unwrapped += twoPi * std::round (diff / twoPi);
-                }
-                sub += m * std::cos (0.5f * b.unwrapped);
-            }
+            for (int v = 0; v < voices; ++v) { const float y = fast[v].process (x, ratios[v]); wet += y * gains[v]; }
         }
-        float fx = lp.process (up * upAmt * 1.25f + subLp.process (sub * subAmt * 0.5f));
-        fx = hp.process (fx);
-        const float y = x * dry + fx;
+        else
+        {
+            inRing[(size_t) inPos] = x;
+            inPos = (inPos + 1) % N;
+            if (++hopCount >= hop) { hopCount = 0; spectralFrame (ratios, gains); }
+            wet = outAcc[(size_t) outPos];
+            outAcc[(size_t) outPos] = 0.0f;
+            outPos = (outPos + 1) % (2 * N);
+        }
+        // POG2 attack: the octaves swell in after each pick
+        const float a = std::abs (x);
+        fastEnv += (a > fastEnv ? fA : fR) * (a - fastEnv);
+        slowEnv += (a > slowEnv ? sA : sR) * (a - slowEnv);
+        if (fastEnv > 2.5f * slowEnv + 0.002f) attackGain = 0.0f;
+        attackGain = std::min (1.0f, attackGain + rise);
+        wet = hp.process (lp.process (wet)) * (attackSec > 0.005f ? attackGain * attackGain : 1.0f);
+        const float y = x * dry + wet;
         L[i] = R[i] = y;
     }
 }
@@ -598,13 +665,13 @@ void DoublerBlock::process (float* L, float* R, int n)
 // Fuzz
 FuzzBlock::FuzzBlock() : Block (Type::Fuzz)
 {
-    addChoice ("type", "Type", { "Big Muff style", "Fuzz Face style" }, 0);
+    addChoice ("type", "Type", { "Big Muff style", "Fuzz Face style", "Germanium (Buffalo FX style)" }, 0);
     addFloat ("fuzz", "Sustain", 0, 10, 7, {}, -1, 0.1f);
     auto& tn = addFloat ("tone", "Tone", 0, 10, 5, {}, -1, 0.1f);
     auto& bias = addFloat ("bias", "Bias", 0, 10, 6, {}, -1, 0.1f);
     addFloat ("volume", "Volume", 0, 10, 5, {}, -1, 0.1f);
     tn.visible = [] (const Block& b) { return b.params[0]->getInt() == 0; };
-    bias.visible = [] (const Block& b) { return b.params[0]->getInt() == 1; };
+    bias.visible = [] (const Block& b) { return b.params[0]->getInt() >= 1; };
 }
 
 void FuzzBlock::prepare (double sr, int maxBlockSize)
@@ -633,10 +700,15 @@ void FuzzBlock::process (float* L, float* R, int n)
         // Big Muff tone stack: a 1-pole low-pass and high-pass blended, with the classic mid scoop
         muffLp[c].set (Biquad::Type::LowPass, sampleRate, 480.0f, 0.5f);
         muffHp[c].set (Biquad::Type::HighPass, sampleRate, 1100.0f, 0.5f);
-        faceLp[c].set (Biquad::Type::LowPass, sampleRate, 5200.0f, 0.6f);
+        faceLp[c].set (Biquad::Type::LowPass, sampleRate, t == 2 ? 4200.0f : 5200.0f, 0.6f);
+        bigLow[c].set (Biquad::Type::LowShelf, sampleRate, 140.0f, 0.7f, 5.0f);
+        if (t == 2) muffLp[c].set (Biquad::Type::Peak, sampleRate, 750.0f, 0.8f, 2.5f);
+        inHp[c].set (Biquad::Type::HighPass, sampleRate, t == 0 ? 60.0f : 30.0f, 0.7f);   // germanium keeps every bit of low end
         for (int i = 0; i < n; ++i) ch[c][i] = inHp[c].process (ch[c][i]);
     }
-    const float g = t == 0 ? 6.0f + 420.0f * fz * fz : 3.0f + 90.0f * fz * fz;
+    // plenty of gain: these should really fuzz (a guitar's level sits well below full scale)
+    const float fz3 = fz * fz * fz;   // low settings stay gritty, high settings go fully fuzzed
+    const float g = t == 0 ? 2.0f + 2200.0f * fz3 : (t == 1 ? 1.5f + 700.0f * fz3 : 1.5f + 1100.0f * fz3);
     for (int i = 0; i < n; ++i) { L[i] *= g; R[i] *= g; }
 
     juce::dsp::AudioBlock<float> block (ch, 2, (size_t) n);
@@ -649,7 +721,18 @@ void FuzzBlock::process (float* L, float* R, int n)
         for (int i = 0; i < m; ++i)
         {
             float v = x[i];
-            if (t == 0)
+            if (t == 2)
+            {
+                // germanium Fuzz Face, built huge: soft asymmetric clipping that compresses as you dig
+                // in (sag), the bias opening up the low end; still cleans up with the guitar's volume
+                biasEnv[c] += envC * (std::abs (v) - biasEnv[c]);
+                const float sagged = v / (1.0f + 0.15f * std::min (8.0f, biasEnv[c]));
+                const float b = 0.10f + 0.35f * bias;
+                v = fastTanh (sagged * 0.7f + b) - fastTanh (b);
+                v = v > 0 ? v * 1.15f : v * (0.6f + 0.35f * bias);
+                v = stageLp[c][1].lp (v);
+            }
+            else if (t == 0)
             {
                 // two clipping transistor stages with diodes, filtered between
                 v = stageLp[c][0].lp (v);
@@ -670,14 +753,15 @@ void FuzzBlock::process (float* L, float* R, int n)
         }
     }
     os->processSamplesDown (block);
-    const float makeup = t == 0 ? dbToGain (-11.0f) : dbToGain (-15.0f);
+    const float makeup = t == 0 ? dbToGain (-13.0f) : (t == 1 ? dbToGain (-16.0f) : dbToGain (-20.0f));
     level.setTarget (dbToGain ((p (4) - 5.0f) * 4.0f) * makeup);
     for (int c = 0; c < 2; ++c)
         for (int i = 0; i < n; ++i)
         {
             float y = ch[c][i];
             if (t == 0) y = muffLp[c].process (y) * (1.0f - tone) * 1.3f + muffHp[c].process (y) * tone * 1.6f;
-            else y = faceLp[c].process (y);
+            else if (t == 1) y = faceLp[c].process (y);
+            else y = muffLp[c].process (bigLow[c].process (faceLp[c].process (y)));   // germanium: huge low end, smooth top
             ch[c][i] = post[c].process (y);
         }
     for (int i = 0; i < n; ++i) { const float lv = level.next(); L[i] *= lv; R[i] *= lv; }
@@ -981,4 +1065,210 @@ void FreezeBlock::process (float* L, float* R, int n)
         R[i] = R[i] * dry + b * g;
     }
     if (! holding && level <= 0.0f) haveFrozen = false;
+}
+
+//==============================================================================
+// Tremolo
+TremoloBlock::TremoloBlock() : Block (Type::Tremolo)
+{
+    addChoice ("wave", "Type", { "Optical (sine)", "Triangle", "Choppy (square)", "Harmonic" }, 0);
+    addFloat ("rate", "Rate", 0.5f, 15, 4.5f, "Hz", 4, 0.01f);
+    addChoice ("sync", "Sync", { "Off", "1/1", "1/2", "1/4 dot", "1/4", "1/4 trip", "1/8 dot", "1/8", "1/8 trip", "1/16" }, 0);
+    addFloat ("depth", "Depth", 0, 100, 60, "%", -1, 1);
+    addFloat ("width", "Stereo (pan)", 0, 100, 0, "%", -1, 1);
+}
+
+void TremoloBlock::prepare (double sr, int)
+{
+    split[0].set (Biquad::Type::LowPass, (float) sr, 650.0f, 0.6f); split[1].set (Biquad::Type::HighPass, (float) sr, 650.0f, 0.6f);
+    split[2].set (Biquad::Type::LowPass, (float) sr, 650.0f, 0.6f); split[3].set (Biquad::Type::HighPass, (float) sr, 650.0f, 0.6f);
+    reset();
+}
+
+void TremoloBlock::process (float* L, float* R, int n)
+{
+    const int wave = (int) p (0);
+    float rate = p (1);
+    const float syncMs = syncToMs ((int) p (2), context().bpm.load());
+    if (syncMs > 0) rate = 1000.0f / syncMs;
+    const float depth = p (3) * 0.01f, width = p (4) * 0.01f;
+    float* ch[2] = { L, R };
+    for (int i = 0; i < n; ++i)
+    {
+        ph += rate / sampleRate; if (ph >= 1) ph -= 1;
+        for (int c = 0; c < 2; ++c)
+        {
+            const float o = 0.5f * width * (float) c;
+            const float s = std::sin (twoPi * (ph + o));
+            float w;   // 0..1
+            switch (wave)
+            {
+                case 1:  w = tri01 (ph + o); break;
+                case 2:  w = 0.5f + 0.5f * fastTanh (s * 8.0f); break;
+                default: w = std::pow (0.5f + 0.5f * s, 1.4f); break;   // optical: lingers at the bottom
+            }
+            const float x = ch[c][i];
+            if (wave == 3)
+            {
+                // harmonic: lows and highs pulse in opposite directions
+                const float lo = split[c * 2].process (x), hi = split[c * 2 + 1].process (x);
+                const float g1 = 1.0f - depth * (0.5f + 0.5f * s), g2 = 1.0f - depth * (0.5f - 0.5f * s);
+                ch[c][i] = lo * g1 + hi * g2;
+            }
+            else ch[c][i] = x * (1.0f - depth * (1.0f - w));
+        }
+    }
+}
+
+//==============================================================================
+// Vibrato
+VibratoBlock::VibratoBlock() : Block (Type::Vibrato)
+{
+    addFloat ("rate", "Rate", 0.5f, 12, 5.5f, "Hz", 4, 0.01f);
+    addChoice ("sync", "Sync", { "Off", "1/1", "1/2", "1/4 dot", "1/4", "1/4 trip", "1/8 dot", "1/8", "1/8 trip", "1/16" }, 0);
+    addFloat ("depth", "Depth", 0, 100, 40, "%", -1, 1);
+    addChoice ("wave", "Wave", { "Sine", "Triangle" }, 0);
+}
+
+void VibratoBlock::prepare (double sr, int) { for (auto& l : line) l.setMaxSamples ((int) (0.03 * sr)); reset(); }
+
+void VibratoBlock::process (float* L, float* R, int n)
+{
+    float rate = p (0);
+    const float syncMs = syncToMs ((int) p (1), context().bpm.load());
+    if (syncMs > 0) rate = 1000.0f / syncMs;
+    const float depth = p (2) * 0.01f;
+    const bool tri = (int) p (3) == 1;
+    const float ms = 0.001f * sampleRate;
+    float* ch[2] = { L, R };
+    for (int i = 0; i < n; ++i)
+    {
+        ph += rate / sampleRate; if (ph >= 1) ph -= 1;
+        const float l = tri ? tri01 (ph) : sin01 (ph);
+        for (int c = 0; c < 2; ++c)
+        {
+            line[c].push (ch[c][i]);
+            ch[c][i] = line[c].read ((1.0f + depth * 5.0f * l) * ms);
+        }
+    }
+}
+
+//==============================================================================
+// Rotary (BOSS RT-20 / Leslie 122 style)
+RotaryBlock::RotaryBlock() : Block (Type::Rotary)
+{
+    addChoice ("mode", "Mode", { "I (Leslie 122)", "II (wide)", "III (bright)" }, 0);
+    addToggle ("fast", "Fast", false);
+    addToggle ("brake", "Brake", false);
+    addFloat ("rise", "Rise time", 0.2f, 5, 1.4f, "s", 1.2f, 0.01f);
+    addFloat ("slow", "Slow speed", 0.3f, 2, 0.8f, "Hz", -1, 0.01f);
+    addFloat ("fastHz", "Fast speed", 4, 9, 6.7f, "Hz", -1, 0.01f);
+    addFloat ("balance", "Balance (bass/horn)", -100, 100, 0, "%", -1, 1);
+    addFloat ("drive", "Overdrive", 0, 100, 15, "%", -1, 1);
+    addFloat ("effect", "Effect level", 0, 100, 100, "%", -1, 1);
+    addFloat ("direct", "Direct level", 0, 100, 0, "%", -1, 1);
+}
+
+void RotaryBlock::prepare (double sr, int)
+{
+    hornLine.setMaxSamples ((int) (0.01 * sr)); drumLine.setMaxSamples ((int) (0.01 * sr));
+    xLow.set (Biquad::Type::LowPass, (float) sr, 800.0f, 0.707f);
+    xHigh.set (Biquad::Type::HighPass, (float) sr, 800.0f, 0.707f);
+    for (auto& c : cabinet) c.set (Biquad::Type::LowPass, (float) sr, 7500.0f, 0.6f);
+    reset();
+}
+
+void RotaryBlock::reset()
+{
+    hornLine.clear(); drumLine.clear(); xLow.reset(); xHigh.reset();
+    for (auto& t : hornTone) t.reset();
+    for (auto& c : cabinet) c.reset();
+    hornPh = 0; drumPh = 0.3f; hornRate = p (4); drumRate = p (4) * 0.85f;
+}
+
+void RotaryBlock::process (float* L, float* R, int n)
+{
+    const int mode = (int) p (0);
+    const bool fast = p (1) > 0.5f, brake = p (2) > 0.5f;
+    const float rise = p (3);
+    const float hornTarget = brake ? 0.0f : (fast ? p (5) : p (4));
+    const float drumTarget = brake ? 0.0f : (fast ? p (5) * 0.88f : p (4) * 0.83f);
+    const float bal = p (6) * 0.01f, drive = p (7) * 0.01f;
+    const float eff = p (8) * 0.01f, dir = p (9) * 0.01f;
+    // the horn is light and spins up quickly; the heavy drum takes about 3.5x longer
+    const float hornAcc = 1.0f / (rise * sampleRate), drumAcc = 1.0f / (rise * 3.5f * sampleRate);
+    const float spread = mode == 1 ? 1.0f : 0.7f, doppler = mode == 2 ? 0.5f : 0.35f;
+    const float ms = 0.001f * sampleRate;
+    const float hornGain = 1.0f + std::min (0.0f, -bal) * -0.0f + (bal > 0 ? bal : 0) * 0.6f - (bal < 0 ? -bal : 0) * 0.6f;
+    const float drumGain = 1.0f - (bal > 0 ? bal : 0) * 0.6f + (bal < 0 ? -bal : 0) * 0.6f;
+    for (int i = 0; i < n; ++i)
+    {
+        const float dryIn = 0.5f * (L[i] + R[i]);
+        float m = dryIn;
+        if (drive > 0.001f) m = fastTanh (m * (1.0f + 8.0f * drive)) / (1.0f + 2.0f * drive);   // tube amp in the cabinet
+        hornRate += (hornTarget - hornRate) * hornAcc * (hornTarget > hornRate ? 1.0f : 1.4f);
+        drumRate += (drumTarget - drumRate) * drumAcc;
+        hornPh += hornRate / sampleRate; hornPh -= std::floor (hornPh);
+        drumPh += drumRate / sampleRate; drumPh -= std::floor (drumPh);
+        const float lo = xLow.process (m), hi = xHigh.process (m);
+        hornLine.push (hi); drumLine.push (lo);
+        const float hs = std::sin (twoPi * hornPh), hc = std::cos (twoPi * hornPh);
+        const float ds = std::sin (twoPi * drumPh), dcs = std::cos (twoPi * drumPh);
+        // horn: doppler (pitch) + loudness and brightness as it points toward / away from each mic
+        const float horn = hornLine.read ((0.5f + doppler * (1.0f + hs)) * ms + 2.0f);
+        const float drum = drumLine.read ((0.4f + 0.15f * (1.0f + ds)) * ms + 2.0f);
+        float out[2];
+        for (int c = 0; c < 2; ++c)
+        {
+            const float side = c == 0 ? 1.0f : -1.0f;
+            const float facing = 0.5f + 0.5f * hc * side * spread;          // 1 = pointing at this mic
+            float h = horn * (0.45f + 0.75f * facing);
+            hornTone[c].set (Biquad::Type::LowPass, sampleRate, (mode == 2 ? 5000.0f : 3000.0f) + 6000.0f * facing, 0.6f);
+            h = hornTone[c].process (h);
+            const float d = drum * (1.0f + 0.35f * dcs * side * spread);
+            out[c] = cabinet[c].process (h * hornGain + d * drumGain) * 0.8f;
+        }
+        L[i] = out[0] * eff + dryIn * dir;
+        R[i] = out[1] * eff + dryIn * dir;
+    }
+}
+
+//==============================================================================
+// Vibe
+VibeBlock::VibeBlock() : Block (Type::Vibe)
+{
+    addChoice ("mode", "Mode", { "Chorus", "Vibrato" }, 0);
+    addFloat ("rate", "Speed", 0.3f, 10, 2.0f, "Hz", 2, 0.01f);
+    addChoice ("sync", "Sync", { "Off", "1/1", "1/2", "1/4 dot", "1/4", "1/4 trip", "1/8 dot", "1/8", "1/8 trip", "1/16" }, 0);
+    addFloat ("depth", "Intensity", 0, 100, 70, "%", -1, 1);
+    addFloat ("level", "Volume", -12, 12, 0, "dB", -1, 0.1f);
+}
+
+void VibeBlock::process (float* L, float* R, int n)
+{
+    const bool vibrato = (int) p (0) == 1;
+    float rate = p (1);
+    const float syncMs = syncToMs ((int) p (2), context().bpm.load());
+    if (syncMs > 0) rate = 1000.0f / syncMs;
+    const float depth = p (3) * 0.01f, lvl = dbToGain (p (4));
+    static const float stage[4] = { 1.0f, 1.35f, 1.9f, 2.8f };   // the four staggered phase stages
+    const float up = 1.0f - std::exp (-1.0f / (0.006f * sampleRate)), down = 1.0f - std::exp (-1.0f / (0.02f * sampleRate));
+    float* ch[2] = { L, R };
+    for (int i = 0; i < n; ++i)
+    {
+        ph += rate / sampleRate; if (ph >= 1) ph -= 1;
+        // the lamp heats fast and cools slowly: that lopsided throb is the Vibe sound
+        const float target = std::pow (sin01 (ph), 1.6f);
+        lamp += (target - lamp) * (target > lamp ? up : down);
+        for (int c = 0; c < 2; ++c)
+        {
+            float v = ch[c][i];
+            for (int s = 0; s < 4; ++s)
+            {
+                const float f = 110.0f * stage[s] * std::pow (12.0f, lamp * depth);
+                v = ap[c][s].process (v, apCoef (f, sampleRate));
+            }
+            ch[c][i] = (vibrato ? v : 0.5f * (ch[c][i] + v)) * lvl * (vibrato ? 1.0f : 1.3f);
+        }
+    }
 }

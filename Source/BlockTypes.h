@@ -276,27 +276,6 @@ private:
     float plateSize = -1;
 };
 
-class ModulationBlock : public Block
-{
-public:
-    ModulationBlock();
-    enum Kind { Chorus, Flanger, Phaser, Tremolo, Vibrato, Rotary, Vibe };
-protected:
-    void prepare (double sr, int maxBlock) override;
-    void reset() override;
-    void process (float* L, float* R, int n) override;
-private:
-    ndsp::DelayLine line[2];
-    ndsp::LFO lfo;
-    struct AP1 { float z = 0; inline float process (float x, float a) { const float y = a * x + z; z = x - a * y; return y; } };
-    AP1 ap[2][12];
-    float fb[2] = { 0, 0 };
-    float hornPh = 0, drumPh = 0, hornRate = 0.8f, drumRate = 0.7f;
-    ndsp::Biquad xLow[2], xHigh[2];
-    ndsp::DelayLine hornLine;
-    float vibeLamp = 0;
-};
-
 class TriChorusBlock : public Block
 {
 public:
@@ -423,7 +402,7 @@ private:
     float posSm = -1;
 };
 
-// Polyphonic octave (Micro POG style): sub octave, octave up and dry, with a filter.
+// Polyphonic octave (Micro POG / POG2 style): sub octaves, octaves up, dry, detune, attack, filter.
 class OctaveBlock : public Block
 {
 public:
@@ -433,11 +412,15 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
-    static constexpr int bands = 28;
-    struct Band { float cr = 0, ci = 0, zr = 0, zi = 0, gain = 1, lastPh = 0, unwrapped = 0, env = 0; };
-    Band band[bands];
-    float bandFreq[bands] {};
-    ndsp::Biquad lp, hp, subLp;
+    static constexpr int order = 10, N = 1 << order, hop = N / 8, voices = 4;
+    void spectralFrame (const float ratios[voices], const float gains[voices]);
+    std::unique_ptr<juce::dsp::FFT> fft;
+    std::vector<float> inRing, window, outAcc, buf, lastPhase, mag, freq, synPhase[voices], outRe, outIm;
+    int inPos = 0, hopCount = 0, outPos = 0;
+    ndsp::PitchShifter fast[voices];
+    ndsp::Biquad lp, hp;
+    float fastEnv = 0, slowEnv = 0, attackGain = 1;
+    float lastFilter = -1;
 };
 
 // Harmonizer: one or two voices that stay in key.
@@ -508,7 +491,7 @@ protected:
     void process (float* L, float* R, int n) override;
 private:
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
-    ndsp::Biquad inHp[2], muffLp[2], muffHp[2], faceLp[2], post[2];
+    ndsp::Biquad inHp[2], muffLp[2], muffHp[2], faceLp[2], bigLow[2], post[2];
     ndsp::OnePole stageLp[2][2];
     ndsp::Smoothed level;
     float biasEnv[2] {};
@@ -552,4 +535,63 @@ private:
     bool holding = false, haveFrozen = false;
     float level = 0, lastNoteSet = -1;
     juce::Random rng;
+};
+
+// Tremolo: optical-style sine, triangle, choppy square, or harmonic (Brownface-style band split).
+class TremoloBlock : public Block
+{
+public:
+    TremoloBlock();
+protected:
+    void prepare (double sr, int) override;
+    void reset() override { ph = 0; for (auto& f : split) f.reset(); }
+    void process (float* L, float* R, int n) override;
+private:
+    float ph = 0;
+    ndsp::Biquad split[4];   // low/high for each channel (harmonic mode)
+};
+
+// Vibrato: pure pitch wobble.
+class VibratoBlock : public Block
+{
+public:
+    VibratoBlock();
+protected:
+    void prepare (double sr, int) override;
+    void reset() override { for (auto& l : line) l.clear(); ph = 0; }
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::DelayLine line[2];
+    float ph = 0;
+};
+
+// Rotary speaker, after the BOSS RT-20 (modelled on a Leslie 122): horn and drum with their own
+// slow/fast speeds and rise time, balance, tube drive, brake, and three modes.
+class RotaryBlock : public Block
+{
+public:
+    RotaryBlock();
+protected:
+    void prepare (double sr, int) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::Biquad xLow, xHigh, hornTone[2], cabinet[2];
+    ndsp::DelayLine hornLine, drumLine;
+    float hornPh = 0, drumPh = 0.3f, hornRate = 0.8f, drumRate = 0.7f;
+};
+
+// Uni-Vibe style: four staggered phase stages swept by a lamp, chorus or vibrato.
+class VibeBlock : public Block
+{
+public:
+    VibeBlock();
+protected:
+    void prepare (double, int) override { reset(); }
+    void reset() override { for (auto& c : ap) for (auto& a : c) a.z = 0; lamp = 0; ph = 0; }
+    void process (float* L, float* R, int n) override;
+private:
+    struct AP1 { float z = 0; inline float process (float x, float a) { const float y = a * x + z; z = x - a * y; return y; } };
+    AP1 ap[2][4];
+    float lamp = 0, ph = 0;
 };
