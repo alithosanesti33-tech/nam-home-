@@ -1,6 +1,7 @@
 #pragma once
 #include "Blocks.h"
 #include "phat/PhatCore.h"
+#include "Measure.h"
 #include "dsp/GuitarTracker.h"
 #include "dsp/SaxVoice.h"
 #include "dsp/SaxSampler.h"
@@ -22,6 +23,7 @@ public:
     juce::String load (const juce::File& f);   // message thread; returns error text or empty
     void unload();
     juce::String getPath() const { return path; }
+    juce::Colour getColour() const override { const float g = loaded.load() ? measure::recall (path) : -1.0f; return g >= 0 ? measure::gainColour (g) : Block::getColour(); }
     bool isLoaded() const { return loaded.load(); }
     bool includesCab() const { return gearType.containsIgnoreCase ("cab"); }
     juce::String getToneType() const { return toneType; }
@@ -62,6 +64,11 @@ public:
     juce::String loadIr (int index, const juce::File& f);   // message thread
     void clearIr (int index);
     juce::String getIrPath (int index) const { return irs[(size_t) index].path; }
+    juce::Colour getColour() const override
+    {
+        for (int i = 0; i < numIrs; ++i) if (isIrLoaded (i)) { const float b = measure::recall (getIrPath (i)); if (b >= 0) return measure::irColour (b); break; }
+        return Block::getColour();
+    }
     bool isIrLoaded (int index) const { return irs[(size_t) index].loaded.load(); }
     int numLoaded() const;
     void updateAlignment();                                 // message thread (timer)

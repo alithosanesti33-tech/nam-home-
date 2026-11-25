@@ -409,6 +409,7 @@ void GridView::addBlockAt (Block::Type t, Point<int> cell, int variant)
 {
     auto b = proc.engine.addBlock (t, cell.y, cell.x);
     if (auto* sax = dynamic_cast<SaxBlock*> (b.get())) sax->setModel (juce::jmax (0, variant));
+    else if (variant >= 0) if (auto* vp = b->variantParam()) vp->set ((float) variant);   // e.g. "Green OD" from the library
     if (t == Block::Type::Delay || t == Block::Type::Reverb || t == Block::Type::TriChorus
         || t == Block::Type::Chorus || t == Block::Type::Flanger || t == Block::Type::Doubler)
         if (cell.y > 0)

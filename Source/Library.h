@@ -14,6 +14,9 @@ struct LibraryItem
     juce::String pack;        // folder it came from (e.g. a zip name)
     juce::String micTag;      // user-editable label for IRs; never changes the sound
     bool adjustable = false;  // parametric (adjustable-knob) model
+    float gain = -1.0f;       // measured: 0 clean .. 1 high gain (captures); -1 not measured yet
+    float bright = -1.0f;     // measured: 0 dark .. 1 bright (IRs)
+    juce::String ampGroup() const;   // folder name in the library tree, e.g. "Soldano SLO-100"
     bool isNew = false;
 
     juce::String creditLine() const;
@@ -27,13 +30,14 @@ juce::Colour gainLevelColour (GainLevel g);
 juce::String gainLevelName (GainLevel g);
 
 // The library folder (Music/NAM Home), the user's tags, and the Downloads watcher.
-class Library : private juce::Timer
+class Library : private juce::Timer, private juce::Thread
 {
 public:
     Library();
     ~Library() override;
 
     juce::File getFolder() const { return folder; }
+    void measureInBackground();   // gain/brightness for anything not measured yet
     void rescan();
     const std::vector<LibraryItem>& getItems() const { return items; }
     const LibraryItem* findByPath (const juce::String& path) const;
@@ -70,6 +74,8 @@ private:
     void saveTags();
     void loadSettings();
     void saveSettings();
+    void run() override;
+    std::vector<std::pair<juce::File, bool>> toMeasure;
 
     juce::File folder;
     std::vector<LibraryItem> items;

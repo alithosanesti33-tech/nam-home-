@@ -308,3 +308,47 @@ std::unique_ptr<Block> Block::create (Type t)
     }
     return nullptr;
 }
+
+//==============================================================================
+Param* Block::variantParam() const
+{
+    // the choice that picks a model: Drive "type", Compressor "model", Octave "mode", Tremolo "wave"...
+    static const char* ids[] = { "type", "model" };
+    if (type == Type::NamAmp || type == Type::NamPedal || type == Type::Cab || type == Type::Whammy) return nullptr;
+    for (auto* id : ids)
+        for (auto& prm : params)
+            if (prm->id == id && prm->kind == Param::Kind::Choice) return prm.get();
+    if (type == Type::Octave || type == Type::Rotary) for (auto& prm : params) if (prm->id == "mode") return prm.get();
+    if (type == Type::Tremolo) for (auto& prm : params) if (prm->id == "wave") return prm.get();
+    return nullptr;
+}
+
+int Block::variantIndex() const { if (auto* v = variantParam()) return (int) v->get(); return -1; }
+
+juce::Colour Block::colourFor (Type t, int v)
+{
+    switch (t)
+    {
+        case Type::Drive:
+        {
+            // Green OD = Tube Screamer green, Transparent OD = Klon silver, Distortion = RAT black
+            static const juce::uint32 c[5] = { 0xff2e9e4f, 0xffc8ccd2, 0xffe0a030, 0xff2b2b30, 0xffb0532c };
+            return juce::Colour (c[juce::jlimit (0, 4, v)]);
+        }
+        case Type::Fuzz:
+        {
+            static const juce::uint32 c[3] = { 0xffe3e5e8, 0xffc62f2f, 0xffd9822b };   // Big Muff chrome, Fuzz Face red, germanium orange
+            return juce::Colour (c[juce::jlimit (0, 2, v)]);
+        }
+        case Type::Compressor: return v == 1 ? juce::Colour (0xff6f87b3) : colour (t);
+        case Type::ATDrive:    return juce::Colour (0xffd23a3a);
+        case Type::Whammy:     return juce::Colour (0xffd32f2f);
+        case Type::Octave:     return juce::Colour (0xff9fb2c8);
+        case Type::EnvFilter:  return juce::Colour (0xff3c7dd9);
+        case Type::Swell:      return juce::Colour (0xffd9d9d9);
+        case Type::Wah: case Type::Volume: return juce::Colour (0xff2b2b30);
+        case Type::Reverb:     return juce::Colour (0xffc56be2);
+        case Type::Freeze:     return juce::Colour (0xff8fd3ff);
+        default:               return colour (t);
+    }
+}

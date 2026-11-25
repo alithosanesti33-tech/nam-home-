@@ -1,4 +1,5 @@
 #include "Library.h"
+#include "Measure.h"
 #include "json.hpp"
 #include <fstream>
 
@@ -49,7 +50,7 @@ juce::String gainLevelName (GainLevel g)
 }
 
 //==============================================================================
-Library::Library()
+Library::Library() : juce::Thread ("Library measuring")
 {
     formats.registerBasicFormats();
     folder = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("NAM Home");
@@ -70,6 +71,7 @@ Library::Library()
 
 Library::~Library()
 {
+    stopThread (5000);
     stopTimer();
     saveSettings();
     saveTags();
@@ -231,6 +233,16 @@ LibraryItem Library::readItem (const juce::File& f) const
     if (it.kind == LibraryItem::Kind::IR && it.creator.isEmpty() && it.pack.isNotEmpty())
         it.creator = it.pack + " (pack folder)";
 
+    if (entry.isObject())
+    {
+        const auto mt = (double) f.getLastModificationTime().toMilliseconds();
+        if ((double) entry.getProperty ("measuredAt", 0.0) == mt)
+        {
+            it.gain = (float) (double) entry.getProperty ("gainScore", -1.0);
+            it.bright = (float) (double) entry.getProperty ("brightScore", -1.0);
+            measure::remember (path, it.kind == LibraryItem::Kind::IR ? it.bright : it.gain);
+        }
+    }
     it.isNew = newPaths.contains (path);
     return it;
 }
@@ -249,6 +261,7 @@ void Library::rescan()
                { return a.name.compareNatural (b.name) < 0; });
     saveTags();
     if (onChanged) onChanged();
+    measureInBackground();
 }
 
 const LibraryItem* Library::findByPath (const juce::String& path) const
@@ -394,4 +407,53 @@ void Library::checkDownloads()
         if (onNotice)
             onNotice (juce::String (added) + (added == 1 ? " new file" : " new files") + " added from Downloads");
     }
+}
+
+juce::String LibraryItem::ampGroup() const
+{
+    // the amp a capture belongs to: its own make/model info, else the pack folder, else the file name
+    auto clean = [] (juce::String x) { return x.replaceCharacters ("_-", "  ").trim(); };
+    juce::String g = (gearMake + " " + gearModel).trim();
+    if (g.isEmpty() && pack.isNotEmpty()) g = clean (pack);
+    if (g.isEmpty())
+    {
+        auto words = juce::StringArray::fromTokens (clean (file.getFileNameWithoutExtension()), " ", {});
+        words.removeEmptyStrings();
+        while (words.size() > 2) words.remove (words.size() - 1);
+        g = words.joinIntoString (" ");
+    }
+    return g.isEmpty() ? juce::String ("Other") : g;
+}
+
+void Library::measureInBackground()
+{
+    if (isThreadRunning()) return;
+    toMeasure.clear();
+    for (auto& it : items)
+        if ((it.kind == LibraryItem::Kind::IR ? it.bright : it.gain) < 0) toMeasure.push_back ({ it.file, it.kind == LibraryItem::Kind::IR });
+    if (! toMeasure.empty()) startThread (juce::Thread::Priority::low);
+}
+
+void Library::run()
+{
+    // measure each capture / IR once; results are kept in library.json with the file's date
+    const auto todo = toMeasure;
+    int done = 0;
+    for (auto& [f, isIr] : todo)
+    {
+        if (threadShouldExit()) return;
+        const float v = isIr ? measure::irBrightness (f) : measure::namGain (f);
+        const auto path = f.getFullPathName();
+        const double mt = (double) f.getLastModificationTime().toMilliseconds();
+        juce::MessageManager::callAsync ([this, path, v, isIr, mt]
+        {
+            auto* e = entryFor (tags, path);
+            e->setProperty (isIr ? "brightScore" : "gainScore", v);
+            e->setProperty ("measuredAt", mt);
+            measure::remember (path, v);
+            for (auto& it : items) if (it.file.getFullPathName() == path) (isIr ? it.bright : it.gain) = v;
+        });
+        if (++done % 8 == 0) juce::MessageManager::callAsync ([this] { saveTags(); if (onChanged) onChanged(); });
+    }
+    juce::MessageManager::callAsync ([this] { saveTags(); if (onChanged) onChanged(); });
 }

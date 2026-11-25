@@ -35,11 +35,16 @@ public:
     Merge merges[rows];
 
     // ---- inputs: like the Quad Cortex, each row can take its own interface input.
-    // rowInput[r] = 0 means "from main path" (split/merge); 1..2 = interface input 1..2.
+    // rowInput[r] = 0 means "from main path" (split/merge); 1..2 = interface input 1..2;
+    // 3 = continues the chain from the row above (one long chain wrapped onto the next line).
     // Row 0 always has its own input (1 by default). A row with its own input is a separate rig,
     // mixed into the output with its merge level and pan.
     std::atomic<int> rowInput[rows] { { 1 }, { 0 }, { 0 }, { 0 } };
-    bool rowIsIndependent (int r) const { return r == 0 || rowInput[r].load() > 0; }
+    bool rowIsIndependent (int r) const { const int in = rowInput[r].load(); return r == 0 || in == 1 || in == 2; }
+    bool rowContinues (int r) const { return r > 0 && rowInput[r].load() == 3 && (r == 1 || rowInput[r - 1].load() == 3); }
+    // insert-style editing: put a block at a position in a row; the blocks after it slide over
+    bool insertInRow (int r, int index, std::shared_ptr<Block> b);
+    void removeFromRow (int r, int c, bool closeGap);
     std::atomic<float> inputPeaks[2] { { 0 }, { 0 } };
 
     // ---- global controls

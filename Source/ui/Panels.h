@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include "Widgets.h"
 #include "../Library.h"
 #include "../Blocks.h"
@@ -18,7 +19,13 @@ public:
     std::function<void (const juce::String&, bool)> onMessage;
 
 private:
-    struct Entry { const LibraryItem* item = nullptr; Block::Type type = Block::Type::Gate; bool header = false; juce::String label; int variant = -1; };
+    struct Entry
+    {
+        const LibraryItem* item = nullptr; Block::Type type = Block::Type::Gate; bool header = false; juce::String label; int variant = -1;
+        bool folder = false; juce::String key; int depth = 0; int count = 0; juce::Colour swatch;
+    };
+    void listBoxItemClicked (int row, const juce::MouseEvent&) override;
+    std::set<juce::String> openFolders;
     int getNumRows() override { return (int) shown.size(); }
     void paintListBoxItem (int row, juce::Graphics&, int w, int h, bool selected) override;
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;

@@ -55,7 +55,11 @@ public:
 
     Type getType() const { return type; }
     juce::String getTypeName() const { return typeName (type); }
-    juce::Colour getColour() const { return colour (type); }
+    virtual juce::Colour getColour() const { return colourFor (type, variantIndex()); }
+    // blocks with several models (drive types, delay types...) list each one in the library
+    int variantIndex() const;                         // current model, or -1
+    Param* variantParam() const;               // the choice that picks the model
+    static juce::Colour colourFor (Type t, int variant);   // pedals take the colour of the pedal they are based on
     virtual juce::String getTitle() const { return getTypeName(); }   // big text on the tile
     virtual juce::String getSubtitle() const;                         // small text on the tile
 

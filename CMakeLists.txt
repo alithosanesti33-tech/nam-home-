@@ -45,6 +45,7 @@ target_sources(NAMHome PRIVATE
     Source/Blocks.cpp
     Source/Effects.cpp
     Source/Effects2.cpp
+    Source/Measure.cpp
     Source/Instruments.cpp
     Source/NamBlocks.cpp
     Source/Engine.cpp

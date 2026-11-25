@@ -162,6 +162,33 @@ bool Engine::findCell (int id, int& r, int& c) const
     return false;
 }
 
+bool Engine::insertInRow (int r, int index, std::shared_ptr<Block> b)
+{
+    auto& row = cells[(size_t) r];
+    if (row[(size_t) (cols - 1)] != nullptr)
+    {
+        // full at the end: only possible if there is a hole at or after the insert point
+        int hole = -1;
+        for (int c = index; c < cols; ++c) if (row[(size_t) c] == nullptr) { hole = c; break; }
+        if (hole < 0) return false;
+        for (int c = hole; c > index; --c) row[(size_t) c] = row[(size_t) (c - 1)];
+    }
+    else
+        for (int c = cols - 1; c > index; --c) row[(size_t) c] = row[(size_t) (c - 1)];
+    row[(size_t) index] = std::move (b);
+    publish();
+    return true;
+}
+
+void Engine::removeFromRow (int r, int c, bool closeGap)
+{
+    auto& row = cells[(size_t) r];
+    row[(size_t) c] = nullptr;
+    if (closeGap)
+        for (int k = c; k < cols - 1; ++k) { row[(size_t) k] = row[(size_t) (k + 1)]; row[(size_t) (k + 1)] = nullptr; }
+    publish();
+}
+
 bool Engine::rowSpan (int r, int& first, int& last) const
 {
     first = cols; last = -1;
@@ -389,6 +416,8 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
 
     bool independent[rows];
     for (int r = 0; r < rows; ++r) independent[r] = rowIsIndependent (r);
+    bool continues[rows];
+    for (int r = 0; r < rows; ++r) continues[r] = rowContinues (r);
 
     // the clean interface inputs, for instrument blocks that track your dry guitar wherever they sit
     for (int k = 0; k < 2; ++k)
@@ -416,7 +445,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     for (int c = 0; c < cols; ++c)
     {
         for (int r = 1; r < rows; ++r)
-            if (! independent[r] && plan.active[r] && plan.first[r] == c)
+            if (! independent[r] && ! continues[r] && plan.active[r] && plan.first[r] == c)
             {
                 std::copy (mL, mL + n, buf[r][0].begin());
                 std::copy (mR, mR + n, buf[r][1].begin());
@@ -425,7 +454,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         if (auto* b = plan.cell[0][c]) { b->cleanInput = cleanFor[0]; b->run (mL, mR, n); }
         for (int r = 1; r < rows; ++r)
         {
-            if (! plan.active[r] || plan.cell[r][c] == nullptr) continue;
+            if (! plan.active[r] || plan.cell[r][c] == nullptr || continues[r]) continue;
             if (independent[r] || (c >= plan.first[r] && c <= plan.last[r]))
             {
                 plan.cell[r][c]->cleanInput = cleanFor[r];
@@ -436,7 +465,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         bool mainScaled = false;
         for (int r = 1; r < rows; ++r)
         {
-            if (independent[r] || ! plan.active[r] || plan.last[r] != c) continue;
+            if (independent[r] || continues[r] || ! plan.active[r] || plan.last[r] != c) continue;
             auto& m = merges[r];
             if (! mainScaled)
             {
@@ -451,6 +480,14 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
             const float* br = buf[r][1].data();
             for (int i = 0; i < n; ++i) { mL[i] += bl[i] * gl; mR[i] += br[i] * gr; }
         }
+    }
+
+    // rows set to "continue": the main chain carries on through them, in order
+    for (int r = 1; r < rows; ++r)
+    {
+        if (! continues[r] || ! plan.active[r]) continue;
+        for (int c = 0; c < cols; ++c)
+            if (auto* b = plan.cell[r][c]) { b->cleanInput = cleanFor[0]; b->run (mL, mR, n); }
     }
 
     // separate rigs (own input) are mixed in at the end with their level and pan
@@ -632,7 +669,7 @@ void Engine::fromVar (const juce::var& v)
             merges[r].branchPan = (float) m.getProperty ("branchPan", 0.0f);
         }
     if (auto* ins = v.getProperty ("rowInputs", {}).getArray())
-        for (int r = 0; r < rows && r < ins->size(); ++r) rowInput[r] = juce::jlimit (r == 0 ? 1 : 0, 2, (int) (*ins)[r]);
+        for (int r = 0; r < rows && r < ins->size(); ++r) rowInput[r] = juce::jlimit (r == 0 ? 1 : 0, r == 0 ? 2 : 3, (int) (*ins)[r]);
     else for (int r = 0; r < rows; ++r) rowInput[r] = r == 0 ? 1 : 0;
     transposeSemis = juce::jlimit (-12, 12, (int) v.getProperty ("transposeSemis", 0));
     transposeCents = juce::jlimit (-50.0f, 50.0f, (float) v.getProperty ("transposeCents", 0.0f));

@@ -1,4 +1,5 @@
 #include "Panels.h"
+#include "../Measure.h"
 #include "../PluginProcessor.h"
 
 using namespace juce;
@@ -67,19 +68,75 @@ void LibraryPanel::refresh()
         shown.insert (shown.end(), tmp.begin(), tmp.end());
     };
 
+    // captures: amp folder > gain-stage folder > the captures themselves (like Neural DSP's menus)
+    const bool searching = q.isNotEmpty();
+    auto addCaptureTree = [&] (const String& label, std::function<bool (const LibraryItem&)> pred)
+    {
+        std::map<String, std::map<int, std::vector<const LibraryItem*>>> tree;
+        int total = 0;
+        for (auto& it : proc.library.getItems())
+            if (pred (it) && matches (it.name + " " + it.creator + " " + it.gearMake + " " + it.gearModel + " " + it.pack + " " + it.ampGroup()))
+            {
+                tree[it.ampGroup()][measure::gainStage (it.gain)].push_back (&it);
+                ++total;
+            }
+        if (total == 0) return;
+        addSection (label + "  ·  " + String (total));
+        for (auto& [group, stages] : tree)
+        {
+            int n = 0; for (auto& [st, v] : stages) n += (int) v.size();
+            Entry f; f.folder = true; f.depth = 0; f.key = label + "/" + group; f.label = group; f.count = n;
+            shown.push_back (f);
+            if (! searching && openFolders.count (f.key) == 0) continue;
+            // the model's short name for the stage folders: "SLO-100 Clean"
+            auto words = StringArray::fromTokens (group, " ", {});
+            const String model = words.size() > 1 ? words.joinIntoString (" ", 1) : group;
+            for (auto& [st, v] : stages)
+            {
+                Entry sf; sf.folder = true; sf.depth = 1; sf.key = f.key + "/" + String (st); sf.count = (int) v.size();
+                sf.label = st < 0 ? model + "  (measuring...)" : model + " " + measure::gainStageName (st);
+                sf.swatch = st < 0 ? theme::faint : measure::gainColour ((float) st * 0.2f + 0.1f);
+                shown.push_back (sf);
+                if (! searching && openFolders.count (sf.key) == 0) continue;
+                for (auto* it : v) { Entry e; e.item = it; e.depth = 2; shown.push_back (e); }
+            }
+        }
+    };
+
     const bool all = filter == 0;
     if (all || filter == 1) addItems ("Adjustable amps", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && i.adjustable; });
-    if (all || filter == 2) addItems ("NAM amp captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && ! i.adjustable; });
-    if (all || filter == 2 || filter == 3) addItems ("NAM pedal captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Pedal; });
+    if (all || filter == 2) addCaptureTree ("NAM amp captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && ! i.adjustable; });
+    if (all || filter == 2 || filter == 3) addCaptureTree ("NAM pedal captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Pedal; });
     if (all || filter == 4) addItems ("Cabinet IRs", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::IR; });
     auto addBuiltIns = [&] (const String& label, std::function<bool (Block::Type)> pred)
     {
+        // every model gets its own entry ("Green OD", "Tape delay", "Hall reverb"...)
+        static const std::map<Block::Type, String> suffix {
+            { Block::Type::Drive, "" }, { Block::Type::Fuzz, "" }, { Block::Type::Delay, " delay" }, { Block::Type::Reverb, " reverb" },
+            { Block::Type::Chorus, " chorus" }, { Block::Type::Phaser, " phaser" }, { Block::Type::Flanger, " flanger" },
+            { Block::Type::Compressor, " compressor" }, { Block::Type::Tremolo, " tremolo" } };
         std::vector<Entry> fx;
         for (auto t : Block::allTypes())
         {
             if (t == Block::Type::NamAmp || t == Block::Type::NamPedal || t == Block::Type::Cab || ! pred (t)) continue;
+            auto sfx = suffix.find (t);
+            if (sfx != suffix.end())
+            {
+                auto tmp = Block::create (t);
+                if (auto* vp = tmp->variantParam())
+                {
+                    for (int v = 0; v < vp->choices.size(); ++v)
+                    {
+                        String name = vp->choices[v] + sfx->second;
+                        if (t == Block::Type::Compressor && v == 0) name = "Studio compressor";
+                        if (! matches (name + " " + Block::typeName (t) + " " + Block::categoryName (t))) continue;
+                        Entry e; e.type = t; e.variant = v; e.label = name; e.swatch = Block::colourFor (t, v); fx.push_back (e);
+                    }
+                    continue;
+                }
+            }
             if (! matches (Block::typeName (t) + " " + Block::categoryName (t))) continue;
-            Entry e; e.type = t; e.label = Block::typeName (t); fx.push_back (e);
+            Entry e; e.type = t; e.label = Block::typeName (t); e.swatch = Block::colourFor (t, -1); fx.push_back (e);
         }
         if (fx.empty()) return;
         addSection (label);
@@ -148,6 +205,14 @@ void LibraryPanel::resized()
     list.setBounds (r);
 }
 
+void LibraryPanel::listBoxItemClicked (int row, const MouseEvent&)
+{
+    if (row < 0 || row >= (int) shown.size() || ! shown[(size_t) row].folder) return;
+    const auto key = shown[(size_t) row].key;
+    if (openFolders.count (key)) openFolders.erase (key); else openFolders.insert (key);
+    refresh();
+}
+
 void LibraryPanel::paintListBoxItem (int row, Graphics& g, int w, int h, bool selected)
 {
     if (row < 0 || row >= (int) shown.size()) return;
@@ -164,21 +229,40 @@ void LibraryPanel::paintListBoxItem (int row, Graphics& g, int w, int h, bool se
         g.setColour (theme::hover);
         g.fillRoundedRectangle (2, 2, (float) w - 4, (float) h - 4, 8.0f);
     }
+    const int ind = e.depth * 16;
+    if (e.folder)
+    {
+        const bool open = openFolders.count (e.key) > 0 || search.getText().trim().isNotEmpty();
+        Path chev;
+        const float cx = 18.0f + (float) ind, cy = (float) h * 0.5f;
+        if (open) { chev.startNewSubPath (cx - 4, cy - 2); chev.lineTo (cx, cy + 2); chev.lineTo (cx + 4, cy - 2); }
+        else      { chev.startNewSubPath (cx - 2, cy - 4); chev.lineTo (cx + 2, cy); chev.lineTo (cx - 2, cy + 4); }
+        g.setColour (theme::muted);
+        g.strokePath (chev, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+        int x = 30 + ind;
+        if (e.depth == 1) { g.setColour (e.swatch); g.fillRoundedRectangle ((float) x, cy - 5, 10, 10, 3.0f); x += 16; }
+        g.setColour (theme::text);
+        g.setFont (theme::font (e.depth == 0 ? 14.0f : 13.0f, e.depth == 0 ? 2 : 1));
+        g.drawText (e.label, x, 0, w - x - 44, h, Justification::centredLeft);
+        g.setColour (theme::faint);
+        g.setFont (theme::font (11.5f));
+        g.drawText (String (e.count), w - 44, 0, 34, h, Justification::centredRight);
+        return;
+    }
     if (e.item != nullptr)
     {
         const auto& it = *e.item;
-        const auto c = it.kind == LibraryItem::Kind::IR ? Block::colour (Block::Type::Cab)
-                     : it.kind == LibraryItem::Kind::Pedal ? Block::colour (Block::Type::NamPedal) : Block::colour (Block::Type::NamAmp);
+        const auto c = it.kind == LibraryItem::Kind::IR ? measure::irColour (it.bright) : measure::gainColour (it.gain);
         g.setColour (c);
-        g.fillRoundedRectangle (12, (float) h * 0.5f - 6, 12, 12, 3.0f);
+        g.fillRoundedRectangle (12.0f + (float) ind, (float) h * 0.5f - 6, 12, 12, 3.0f);
         g.setColour (theme::text);
         g.setFont (theme::font (13.5f, 1));
-        g.drawText (it.name, 34, 5, w - 96, 19, Justification::centredLeft);
+        g.drawText (it.name, 34 + ind, 5, w - 96 - ind, 19, Justification::centredLeft);
         auto sub = it.creditLine();
         if (it.micTag.isNotEmpty()) sub << "  ·  " << it.micTag;
         g.setColour (theme::muted);
         g.setFont (theme::font (12.0f));
-        g.drawText (sub, 34, 24, w - 96, 17, Justification::centredLeft);
+        g.drawText (sub, 34 + ind, 24, w - 96 - ind, 17, Justification::centredLeft);
         if (it.isNew)
         {
             g.setColour (Colour (0xff0f2e2a));
@@ -190,7 +274,7 @@ void LibraryPanel::paintListBoxItem (int row, Graphics& g, int w, int h, bool se
     }
     else
     {
-        g.setColour (Block::colour (e.type));
+        g.setColour (e.swatch.isTransparent() ? Block::colour (e.type) : e.swatch);
         g.fillRoundedRectangle (12, (float) h * 0.5f - 6, 12, 12, 3.0f);
         g.setColour (theme::text);
         g.setFont (theme::font (13.5f, 1));
@@ -206,7 +290,7 @@ void LibraryPanel::paintListBoxItem (int row, Graphics& g, int w, int h, bool se
 
 void LibraryPanel::listBoxItemDoubleClicked (int row, const MouseEvent&)
 {
-    if (row < 0 || row >= (int) shown.size() || shown[(size_t) row].header) return;
+    if (row < 0 || row >= (int) shown.size() || shown[(size_t) row].header || shown[(size_t) row].folder) return;
     const auto& e = shown[(size_t) row];
     if (e.item != nullptr) { if (onLoadFile) onLoadFile (e.item->file); }
     else if (onAddEffect) onAddEffect (e.type, e.variant);
@@ -216,7 +300,7 @@ var LibraryPanel::getDragSourceDescription (const SparseSet<int>& rows)
 {
     if (rows.size() == 0) return {};
     const int r = rows[0];
-    if (r < 0 || r >= (int) shown.size() || shown[(size_t) r].header) return {};
+    if (r < 0 || r >= (int) shown.size() || shown[(size_t) r].header || shown[(size_t) r].folder) return {};
     const auto& e = shown[(size_t) r];
     if (e.item != nullptr) return var ("file:" + e.item->file.getFullPathName());
     return var ("type:" + String ((int) e.type) + (e.variant >= 0 ? ":" + String (e.variant) : String()));
