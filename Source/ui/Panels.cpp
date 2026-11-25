@@ -533,7 +533,7 @@ void TransposePanel::paint (juce::Graphics& g)
     g.drawText ("Transpose (virtual tuning)", 12, 6, 300, 20, juce::Justification::centredLeft);
     g.setColour (theme::faint);
     g.setFont (theme::font (11.5f));
-    g.drawFittedText ("Shifts your guitar before the amps and pedals. Adds about 20 ms of delay when on; small shifts sound most natural.",
+    g.drawFittedText ("Shifts your guitar before the amps and pedals. Adds only a few ms of delay for typical drop tunings; small shifts sound most natural.",
                       juce::Rectangle<int> (12, getHeight() - 40, getWidth() - 24, 34), juce::Justification::topLeft, 2);
 }
 

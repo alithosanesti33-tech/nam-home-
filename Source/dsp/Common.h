@@ -219,29 +219,68 @@ inline float syncToMs (int choice, float bpm)
     return 60000.0f / std::max (20.0f, bpm) * beats[choice];
 }
 
-// Pitch shifter for transposing a guitar: four overlapping Hann-windowed grains read from a delay line
-// at a different speed. Latency is about one grain (~20 ms at 48 kHz); bypassed when the ratio is 1.
+// Pitch shifter for transposing a guitar (low delay, synchronised grains).
+// Two crossfading read heads move through a delay line at the new speed. When a head restarts,
+// its new position is chosen to line up with the waveform the other head is playing, so the
+// crossfade doesn't cancel or "warble". Delay stays small: only the drift of each grain plus the
+// alignment search (a few ms for typical drop tunings). Bypassed entirely when the ratio is 1.
 struct PitchShifter
 {
-    void prepare (float sr) { grain = 0.040f * sr; line.setMaxSamples ((int) (grain * 2.5f) + 8); phase = 0; }
-    void clear() { line.clear(); phase = 0; }
+    void prepare (float sr)
+    {
+        rate = sr;
+        grain = 0.040f * sr;
+        search = (int) (0.012f * sr);
+        line.setMaxSamples ((int) (0.120f * sr));
+        clear();
+    }
+    void clear() { line.clear(); ph[0] = 0.0f; ph[1] = 0.5f; d[0] = d[1] = 4.0f; }
+
     inline float process (float x, float ratio)
     {
         line.push (x);
+        const float drift = 1.0f - ratio;                 // delay change per sample
+        const float span = std::abs (drift) * grain;      // how far a head drifts in one grain
         float y = 0;
-        for (int k = 0; k < 4; ++k)
+        for (int k = 0; k < 2; ++k)
         {
-            float ph = phase + k * 0.25f;
-            ph -= std::floor (ph);
-            const float w = 0.5f - 0.5f * std::cos (twoPi * ph);     // Hann; the squared windows of four grains sum to 1.5
-            y += line.read (2.0f + ph * grain) * w;
+            if (ph[k] >= 1.0f)
+            {
+                ph[k] -= 1.0f;
+                d[k] = restartDelay (drift > 0 ? 4.0f : 4.0f + span, d[1 - k]);
+            }
+            const float w = std::sin (pi * ph[k]);
+            y += line.read (d[k]) * w * w;                // sin^2 windows half a grain apart sum to 1
+            d[k] = std::max (2.0f, d[k] + drift);
+            ph[k] += 1.0f / grain;
         }
-        phase += (1.0f - ratio) / grain;
-        phase -= std::floor (phase);
-        return y * 0.8164966f;   // power-normalised: shifted grains add with unrelated phases
+        return y;
     }
+
+    float restartDelay (float base, float other) const
+    {
+        // pick the start (base .. base+search) whose recent waveform best matches the other head
+        // compare over ~10 ms (longer than one period of a low string), normalised so loud and quiet parts compete fairly
+        const int M = (int) (0.010f * rate);
+        float best = -1.0e30f; int bestOff = 0;
+        for (int off = 0; off < search; ++off)
+        {
+            float s = 0, e = 1.0e-9f;
+            for (int j = 0; j < M; j += 3)
+            {
+                const float a = line.readInt ((int) (base + off) + j), b = line.readInt ((int) other + j);
+                s += a * b; e += a * a;
+            }
+            s /= std::sqrt (e);
+            if (s > best) { best = s; bestOff = off; }
+        }
+        return base + bestOff + (other - std::floor (other));   // keep the other head's fractional position
+    }
+
     DelayLine line;
-    float grain = 1920, phase = 0;
+    float rate = 48000, grain = 1920;
+    int search = 576;
+    float ph[2] { 0, 0.5f }, d[2] { 4, 4 };
 };
 
 inline float softClip (float x) { return std::tanh (x); }
