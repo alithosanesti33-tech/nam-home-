@@ -57,6 +57,16 @@ NAMHomeProcessor::NAMHomeProcessor()
     appSettings = std::make_unique<juce::PropertiesFile> (o);
     tone3000 = std::make_unique<Tone3000> (library, *appSettings);
     library.setPluginMode (isPlugin());
+    if (! isPlugin())
+    {
+        // if the flag is still there, NAM Home didn't close normally last time
+        auto flag = autosaveFile().getSiblingFile ("running.flag");
+        crashedLastTime = flag.existsAsFile() && autosaveFile().existsAsFile();
+        flag.getParentDirectory().createDirectory();
+        flag.replaceWithText ("running");
+    }
+    loadSetlist (appSettings->getValue ("setlist"));
+    loadOutputSettings();
     ndsp::SaxSampleBank::get().setRoot (library.getFolder());   // recordings live next to your captures (on your SSD)
     {
         // tell the installer where the library is, so downloads (sax recordings) land on the same drive
@@ -67,10 +77,177 @@ NAMHomeProcessor::NAMHomeProcessor()
     }
 
     buildDefaultRig();
+    if (crashedLastTime)
+    {
+        // NAM Home closed unexpectedly: put back the rig you were playing
+        const auto v = juce::JSON::parse (autosaveFile());
+        if (v.isObject()) { rigFromVar (v); recoveredRig = true; dirty = true; }
+    }
     startTimerHz (15);
 }
 
-NAMHomeProcessor::~NAMHomeProcessor() { stopTimer(); tone3000 = nullptr; }
+NAMHomeProcessor::~NAMHomeProcessor()
+{
+    stopTimer();
+    tone3000 = nullptr;
+    // a clean quit: no crash recovery needed next time
+    if (! isPlugin()) autosaveFile().getSiblingFile ("running.flag").deleteFile();
+}
+
+juce::StringArray NAMHomeProcessor::outputProfileNames()
+{
+    return { "Flat (studio monitors / FRFR)", "Headphones", "PA / front of house", "Small speaker / laptop", "Into a real power amp + cab" };
+}
+
+void NAMHomeProcessor::applyOutputProfile (int index)
+{
+    // low cut, bass, low mid, mid, presence, air, high cut
+    static const float profiles[][7] = {
+        { 20, 0, 0, 0, 0, 0, 20000 },
+        { 30, -1.5f, 0, 0, -1.0f, -2.0f, 14000 },     // headphones: a touch less fizz and boom
+        { 80, -2.0f, -1.0f, 0.5f, 0, -1.5f, 12000 },  // PA: tighter lows, sits in a mix
+        { 120, 2.0f, -1.0f, 1.0f, 0, -1.0f, 16000 },  // small speakers: no subs they can't play
+        { 20, 0, 0, 0, 0, 0, 20000 }                  // power amp + cab: turn your cab block off; flat here
+    };
+    index = juce::jlimit (0, 4, index);
+    for (int k = 0; k < 7; ++k) engine.outEq[k] = profiles[index][k];
+    ++engine.outEqVersion;
+    appSettings->setValue ("outProfile", index + 1);
+    for (int k = 0; k < 7; ++k) appSettings->setValue ("outEq" + juce::String (k), profiles[index][k]);
+}
+
+void NAMHomeProcessor::setOutputEq (int band, float v)
+{
+    engine.outEq[band] = v;
+    ++engine.outEqVersion;
+    appSettings->setValue ("outEq" + juce::String (band), v);
+    appSettings->setValue ("outProfile", 99);
+}
+
+void NAMHomeProcessor::loadOutputSettings()
+{
+    const float def[] = { 20, 0, 0, 0, 0, 0, 20000 };
+    for (int k = 0; k < 7; ++k) engine.outEq[k] = (float) appSettings->getDoubleValue ("outEq" + juce::String (k), def[k]);
+    ++engine.outEqVersion;
+    engine.spilloverOn = appSettings->getBoolValue ("spillover", true);
+}
+
+juce::File NAMHomeProcessor::autosaveFile() const
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+        .getChildFile ("Application Support").getChildFile ("NAM Home").getChildFile ("autosave.namrig");
+}
+
+void NAMHomeProcessor::autosaveTick()
+{
+    if (isPlugin()) return;   // inside Logic, the song saves NAM Home's state
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (now - lastAutosave < 5000.0) return;
+    lastAutosave = now;
+    const auto text = juce::JSON::toString (rigToVar());
+    if (text == lastAutosaved) return;
+    lastAutosaved = text;
+    autosaveFile().getParentDirectory().createDirectory();
+    autosaveFile().replaceWithText (text);
+}
+
+void NAMHomeProcessor::snapshotIfChanged()
+{
+    const auto now = juce::JSON::toString (rigToVar(), true);
+    if (lastSnapshot.isEmpty()) { lastSnapshot = now; return; }
+    if (now == lastSnapshot) return;
+    undoStack.push_back (lastSnapshot);
+    if (undoStack.size() > 60) undoStack.erase (undoStack.begin());
+    redoStack.clear();
+    lastSnapshot = now;
+}
+
+bool NAMHomeProcessor::undo()
+{
+    snapshotIfChanged();
+    if (undoStack.empty()) return false;
+    redoStack.push_back (lastSnapshot);
+    lastSnapshot = undoStack.back(); undoStack.pop_back();
+    rigFromVar (juce::JSON::parse (lastSnapshot));
+    dirty = true;
+    return true;
+}
+
+bool NAMHomeProcessor::redo()
+{
+    if (redoStack.empty()) return false;
+    undoStack.push_back (lastSnapshot);
+    lastSnapshot = redoStack.back(); redoStack.pop_back();
+    rigFromVar (juce::JSON::parse (lastSnapshot));
+    dirty = true;
+    return true;
+}
+
+juce::StringArray NAMHomeProcessor::setlistNames() const
+{
+    juce::StringArray n;
+    for (const auto& e : juce::RangedDirectoryIterator (setlistFolder(), false, "*.setlist")) n.add (e.getFile().getFileNameWithoutExtension());
+    n.sort (true);
+    return n;
+}
+
+void NAMHomeProcessor::loadSetlist (const juce::String& name)
+{
+    setlist.clear(); setlistName = name; setlistPos = -1;
+    if (name.isEmpty()) { appSettings->setValue ("setlist", ""); return; }
+    const auto v = juce::JSON::parse (setlistFolder().getChildFile (name + ".setlist"));
+    if (auto* a = v.getProperty ("songs", {}).getArray()) for (auto& x : *a) setlist.add (x.toString());
+    setlistPos = setlist.indexOf (currentPreset);
+    appSettings->setValue ("setlist", name);
+}
+
+void NAMHomeProcessor::saveSetlist() const
+{
+    if (setlistName.isEmpty()) return;
+    setlistFolder().createDirectory();
+    auto* o = new juce::DynamicObject();
+    juce::Array<juce::var> songs; for (auto& x : setlist) songs.add (x);
+    o->setProperty ("songs", songs);
+    setlistFolder().getChildFile (setlistName + ".setlist").replaceWithText (juce::JSON::toString (juce::var (o)));
+}
+
+bool NAMHomeProcessor::stepSetlist (int delta)
+{
+    if (setlist.isEmpty()) return false;
+    const int cur = setlist.indexOf (currentPreset);
+    setlistPos = juce::jlimit (0, setlist.size() - 1, (cur < 0 ? (delta > 0 ? -1 : 0) : cur) + delta);
+    return loadPreset (setlist[setlistPos]);
+}
+
+juce::String NAMHomeProcessor::matchPresetLevel()
+{
+    const float l = engine.presetLoudness.load();
+    if (l < -90.0f) return "Play this preset for a few seconds first, so NAM Home can hear how loud it is.";
+    const float measuredWithoutTrim = l - engine.presetTrimDb.load();
+    engine.presetTrimDb = juce::jlimit (-24.0f, 24.0f, referenceLevelDb() - measuredWithoutTrim);
+    engine.presetLoudness = -100.0f;
+    dirty = true;
+    return "Preset level matched (" + juce::String (engine.presetTrimDb.load(), 1) + " dB). Save the preset to keep it.";
+}
+
+juce::String NAMHomeProcessor::matchScenesToA()
+{
+    const float a = engine.sceneLoudness[0].load();
+    if (a < -90.0f) return "Play scene A for a few seconds first.";
+    int done = 0;
+    for (int s = 1; s < Engine::numScenes; ++s)
+    {
+        const float l = engine.sceneLoudness[s].load();
+        if (l < -90.0f) continue;
+        const float rawA = a - engine.sceneTrim (0), raw = l - engine.sceneTrim (s);
+        engine.setSceneTrim (s, engine.sceneTrim (0) + rawA - raw);
+        engine.sceneLoudness[s] = -100.0f;
+        ++done;
+    }
+    dirty = true;
+    return done == 0 ? juce::String ("Play each scene for a few seconds first, then match.")
+                     : "Matched " + juce::String (done) + " scene" + (done > 1 ? "s" : "") + " to scene A. Save the preset to keep it.";
+}
 
 void NAMHomeProcessor::buildDefaultRig()
 {
@@ -113,6 +290,8 @@ void NAMHomeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 void NAMHomeProcessor::timerCallback()
 {
     engine.pollMessageThread();
+    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepSetlist (st);
+    autosaveTick();
     const int pc = engine.pendingProgram.exchange (-1);
     if (pc >= 0)
     {

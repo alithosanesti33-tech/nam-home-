@@ -15,6 +15,7 @@ void Engine::prepare (double sr, int mb)
     maxBlock = juce::jmax (32, mb);
     for (auto& r : buf) for (auto& c : r) c.assign ((size_t) maxBlock, 0.0f);
     for (auto& c : cleanBuf) c.assign ((size_t) maxBlock, 0.0f);
+    for (auto& c : spillBuf) c.assign ((size_t) maxBlock, 0.0f);
     loadMeasurer.reset (sr, maxBlock);
     for (auto& row : cells)
         for (auto& b : row)
@@ -37,8 +38,11 @@ void Engine::publish()
         }
         p.active[r] = r == 0 || p.last[r] >= 0;
     }
+    p.numSpill = 0;
+    for (auto& b : spillBlocks) if (p.numSpill < 8) p.spill[p.numSpill++] = b.get();
     std::vector<std::shared_ptr<Block>> alive;
     for (auto& row : cells) for (auto& b : row) if (b != nullptr) alive.push_back (b);
+    for (auto& b : spillBlocks) alive.push_back (b);
 
     std::vector<std::shared_ptr<Block>> old;
     {
@@ -189,6 +193,27 @@ void Engine::removeFromRow (int r, int c, bool closeGap)
     publish();
 }
 
+float Engine::sceneTrim (int s) const { return scenes[(size_t) juce::jlimit (0, numScenes - 1, s)].trimDb; }
+void Engine::setSceneTrim (int s, float db) { scenes[(size_t) juce::jlimit (0, numScenes - 1, s)].trimDb = juce::jlimit (-24.0f, 24.0f, db); }
+
+const Engine::Mapping* Engine::findMapping (int blockId, int param) const
+{
+    for (auto& m : mappings) if (m.kind >= 0 && m.blockId == blockId && m.param == param) return &m;
+    return nullptr;
+}
+void Engine::setMappingEnd (int blockId, int param, bool toe, float norm)
+{
+    for (auto& m : mappings) if (m.kind >= 0 && m.blockId == blockId && m.param == param) (toe ? m.hi : m.lo) = juce::jlimit (0.0f, 1.0f, norm);
+}
+void Engine::setMappingCurve (int blockId, int param, int curve)
+{
+    for (auto& m : mappings) if (m.kind >= 0 && m.blockId == blockId && m.param == param) m.curve = curve;
+}
+void Engine::resetMappingRange (int blockId, int param)
+{
+    for (auto& m : mappings) if (m.kind >= 0 && m.blockId == blockId && m.param == param) { m.lo = 0; m.hi = 1; m.curve = 0; }
+}
+
 bool Engine::setRow (int r, int startCol, const std::vector<std::shared_ptr<Block>>& blocks)
 {
     if (startCol < 0 || startCol + (int) blocks.size() > cols) return false;
@@ -288,6 +313,12 @@ juce::String Engine::lastMidiText() const
 
 void Engine::pollMessageThread()
 {
+    if (! spillBlocks.empty())
+    {
+        const double t = (juce::Time::getMillisecondCounterHiRes() - spillStarted) / 1000.0;
+        spillGain = t < 4.0 ? 1.0f : (float) juce::jmax (0.0, 1.0 - (t - 4.0) / 2.5);
+        if (t > 6.6) { spillBlocks.clear(); spillGain = 0.0f; publish(); }
+    }
     if (learnArmed.load() && learnStage.load() == 1)
     {
         const double now = juce::Time::getMillisecondCounterHiRes();
@@ -296,7 +327,7 @@ void Engine::pollMessageThread()
         {
             const int kind = learnedKind.load(), num = learnedNum.load();
             const int bid = learnBlock.load(), prm = learnParam.load();
-            bool switchTarget = prm < 0 || bid == -1 || bid == sceneMidiId;
+            bool switchTarget = prm < 0 || bid == -1 || bid == sceneMidiId || bid == setlistMidiId;
             if (! switchTarget)
                 if (auto b = findById (bid))
                     if (prm < (int) b->params.size()) switchTarget = b->params[(size_t) prm]->kind != Param::Kind::Float;
@@ -326,6 +357,7 @@ void Engine::applyMapping (const Mapping& m, int value, bool press, const Plan& 
 {
     if (m.blockId == -1) { if (press) tapFromMidi = true; return; }
     if (m.blockId == sceneMidiId) { if (press) pendingScene = m.param; return; }
+    if (m.blockId == setlistMidiId) { if (press) setlistStepFromMidi = m.param == 0 ? -1 : 1; return; }
     for (int r = 0; r < rows; ++r)
         for (int c = 0; c < cols; ++c)
         {
@@ -347,7 +379,12 @@ void Engine::applyMapping (const Mapping& m, int value, bool press, const Plan& 
                 else prm.setNorm (prm.getNorm() > 0.5f ? 0.0f : 1.0f);
             }
             else if (prm.kind == Param::Kind::Toggle) prm.set (value >= 64 ? 1.0f : 0.0f);
-            else prm.setNorm ((float) value / 127.0f);
+            else
+            {
+                float v = (float) value / 127.0f;
+                if (m.curve == 1) v = v * v; else if (m.curve == 2) v = std::sqrt (v);
+                prm.setNorm (m.lo + (m.hi - m.lo) * v);
+            }
             return;
         }
 }
@@ -524,19 +561,71 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         for (int i = 0; i < n; ++i) { mL[i] += bl[i] * gl; mR[i] += br[i] * gr; }
     }
 
+    // spillover tails from the previous preset, fed silence and faded out
+    if (plan.numSpill > 0)
+    {
+        float* zl = spillBuf[0].data(); float* zr = spillBuf[1].data();
+        for (int k = 0; k < plan.numSpill; ++k)
+        {
+            std::fill (zl, zl + n, 0.0f); std::fill (zr, zr + n, 0.0f);
+            plan.spill[k]->run (zl, zr, n);
+            const float g = spillGain;
+            for (int i = 0; i < n; ++i) { mL[i] += zl[i] * g; mR[i] += zr[i] * g; }
+        }
+    }
+
+    // global output EQ
+    if (outEqVersion.load() != eqVersionSeen)
+    {
+        eqVersionSeen = outEqVersion.load();
+        const float sr = (float) sampleRate;
+        float v[7]; for (int k = 0; k < 7; ++k) v[k] = outEq[k].load();
+        eqActive = v[0] > 21.0f || v[6] < 19500.0f;
+        for (int k = 1; k <= 5; ++k) if (std::abs (v[k]) > 0.05f) eqActive = true;
+        for (int c = 0; c < 2; ++c)
+        {
+            eqF[c][0].set (ndsp::Biquad::Type::HighPass, sr, std::max (20.0f, v[0]), 0.707f);
+            eqF[c][1].set (ndsp::Biquad::Type::LowShelf, sr, 100.0f, 0.7f, v[1]);
+            eqF[c][2].set (ndsp::Biquad::Type::Peak, sr, 400.0f, 0.9f, v[2]);
+            eqF[c][3].set (ndsp::Biquad::Type::Peak, sr, 1500.0f, 0.9f, v[3]);
+            eqF[c][4].set (ndsp::Biquad::Type::Peak, sr, 4000.0f, 0.9f, v[4]);
+            eqF[c][5].set (ndsp::Biquad::Type::HighShelf, sr, 9000.0f, 0.7f, v[5]);
+            eqF[c][6].set (ndsp::Biquad::Type::LowPass, sr, std::min (v[6], sr * 0.45f), 0.707f);
+        }
+    }
+    if (eqActive)
+        for (int i = 0; i < n; ++i)
+            for (int k = 0; k < 7; ++k) { mL[i] = eqF[0][k].process (mL[i]); mR[i] = eqF[1][k].process (mR[i]); }
+
     // output
+    const float trimTarget = dbToGain (presetTrimDb.load() + sceneTrim (currentScene.load()));
     const float outG = dbToGain (outputGainDb.load());
     const bool mono = monoOut.load();
     float pkL = 0, pkR = 0;
     for (int i = 0; i < n; ++i)
     {
-        float l = mL[i] * outG, r = mR[i] * outG;
+        trimSm += 0.0005f * (trimTarget - trimSm);
+        float l = mL[i] * outG * trimSm, r = mR[i] * outG * trimSm;
         if (mono) l = r = 0.5f * (l + r);
         // safety: transparent below -1 dBFS, rounds off anything hotter instead of hard clipping
         auto safe = [] (float v) { const float a = std::abs (v); return a < 0.89f ? v : std::copysign (0.89f + 0.11f * fastTanh ((a - 0.89f) / 0.11f), v); };
         l = safe (l); r = safe (r);
         mL[i] = l; mR[i] = r;
         pkL = std::max (pkL, std::abs (l)); pkR = std::max (pkR, std::abs (r));
+    }
+    {
+        // loudness while you play (quiet moments are ignored), per scene and for the preset
+        double e = 0; for (int i = 0; i < n; ++i) e += 0.5 * (mL[i] * mL[i] + mR[i] * mR[i]);
+        const float db = (float) (10.0 * std::log10 (e / std::max (1, n) + 1.0e-12));
+        if (db > -50.0f)
+        {
+            const float a = std::min (1.0f, (float) n / (float) (sampleRate * 3.0));
+            auto& sl = sceneLoudness[juce::jlimit (0, 7, currentScene.load())];
+            const float cur = sl.load() < -90.0f ? db : sl.load();
+            sl = cur + a * (db - cur);
+            const float pcur = presetLoudness.load() < -90.0f ? db : presetLoudness.load();
+            presetLoudness = pcur + a * (db - pcur);
+        }
     }
     outputPeakL = std::max (pkL, outputPeakL.load() * 0.9f);
     outputPeakR = std::max (pkR, outputPeakR.load() * 0.9f);
@@ -629,6 +718,7 @@ juce::var Engine::toVar() const
             mo->setProperty ("kind", m.kind);
             mo->setProperty ("number", m.number);
             mo->setProperty ("toggle", m.toggle);
+            mo->setProperty ("lo", m.lo); mo->setProperty ("hi", m.hi); mo->setProperty ("curve", m.curve);
             mo->setProperty ("block", m.blockId);
             mo->setProperty ("param", m.param);
             maps.add (juce::var (mo));
@@ -643,6 +733,7 @@ juce::var Engine::toVar() const
         auto* so = new juce::DynamicObject();
         so->setProperty ("valid", sc.valid);
         so->setProperty ("name", sc.name);
+        so->setProperty ("trim", sc.trimDb);
         juce::Array<juce::var> bl;
         for (auto& [bid, st] : sc.blocks)
         {
@@ -659,11 +750,24 @@ juce::var Engine::toVar() const
     }
     o->setProperty ("scenes", scs);
     o->setProperty ("scene", currentScene.load());
+    o->setProperty ("presetTrim", presetTrimDb.load());
     return juce::var (o);
 }
 
 void Engine::fromVar (const juce::var& v)
 {
+    // spillover: the outgoing rig's delay / reverb / freeze tails keep ringing for a few seconds
+    if (spilloverOn.load())
+    {
+        spillBlocks.clear();
+        for (auto& row : cells)
+            for (auto& b : row)
+                if (b != nullptr && b->enabled.load() && b->hasTails() && spillBlocks.size() < 8) spillBlocks.push_back (b);
+        spillStarted = juce::Time::getMillisecondCounterHiRes();
+        spillGain = spillBlocks.empty() ? 0.0f : 1.0f;
+    }
+    presetLoudness = -100.0f;
+    for (auto& l : sceneLoudness) l = -100.0f;
     for (auto& row : cells) for (auto& b : row) b = nullptr;
     std::map<int, int> idMap;   // saved id -> new id (MIDI mappings refer to blocks by id)
 
@@ -714,11 +818,13 @@ void Engine::fromVar (const juce::var& v)
                 m.blockId = bid;
                 m.param = (int) mv.getProperty ("param", 0);
                 m.toggle = (int) mv.getProperty ("toggle", 0);
+                m.lo = (float) mv.getProperty ("lo", 0.0f); m.hi = (float) mv.getProperty ("hi", 1.0f); m.curve = (int) mv.getProperty ("curve", 0);
                 mappings[(size_t) k++] = m;
             }
         }
     }
     resetScenes();
+    presetTrimDb = (float) v.getProperty ("presetTrim", 0.0f);
     if (auto* arr = v.getProperty ("scenes", {}).getArray())
     {
         for (int i = 0; i < numScenes && i < arr->size(); ++i)
@@ -727,6 +833,7 @@ void Engine::fromVar (const juce::var& v)
             auto& sc = scenes[(size_t) i];
             sc.valid = (bool) so.getProperty ("valid", false);
             sc.name = so.getProperty ("name", "").toString();
+            sc.trimDb = (float) so.getProperty ("trim", 0.0f);
             if (auto* bl = so.getProperty ("blocks", {}).getArray())
                 for (auto& bo : *bl)
                 {

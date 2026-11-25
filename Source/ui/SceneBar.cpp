@@ -95,10 +95,29 @@ void SceneBar::showMenu (int i)
     const auto midi = e.describeMapping (Engine::sceneMidiId, i);
     m.addItem (2, midi.isEmpty() ? "MIDI learn a footswitch for this scene" : "MIDI learn again (now " + midi + ")");
     if (midi.isNotEmpty()) m.addItem (3, "Clear MIDI");
+    m.addSeparator();
+    PopupMenu lvl;
+    lvl.addItem (20, "Match all scenes to scene A (play each one first)");
+    lvl.addItem (21, "Match the whole preset to my reference level");
+    lvl.addItem (22, "Use this preset's level as my reference");
+    lvl.addSeparator();
+    const float t = e.sceneTrim (i);
+    lvl.addItem (23, "Reset this scene's level (now " + (t >= 0 ? juce::String ("+") : juce::String()) + juce::String (t, 1) + " dB)", std::abs (t) > 0.05f);
+    m.addSubMenu ("Level matching", lvl);
     m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (padBounds (i).toNearestInt())),
                      [this, i] (int r)
     {
         auto& en = proc.engine;
+        auto say = [this] (const juce::String& t) { if (proc.onNotice) proc.onNotice (t); };
+        if (r == 20) say (proc.matchScenesToA());
+        if (r == 21) say (proc.matchPresetLevel());
+        if (r == 22)
+        {
+            const float l = en.presetLoudness.load();
+            if (l < -90.0f) say ("Play this preset for a few seconds first.");
+            else { proc.setReferenceLevel (l); say ("Reference level set. Use \"Match the whole preset\" on your other presets."); }
+        }
+        if (r == 23) { en.setSceneTrim (i, 0.0f); proc.dirty = true; }
         if (r == 1)
         {
             auto* aw = new AlertWindow ("Rename scene", {}, MessageBoxIconType::NoIcon);

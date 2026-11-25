@@ -74,12 +74,29 @@ void showMidiLearnMenu (Component& target, NAMHomeProcessor& proc, Block& block,
     m.addItem (1, current.isEmpty() ? "MIDI learn (move a pedal, knob or press a footswitch)" : "MIDI learn again (now " + current + ")");
     m.addItem (2, "Clear MIDI", current.isNotEmpty());
     m.addItem (3, "Reset to default", resetToDefault != nullptr);
+    if (auto* mp = proc.engine.findMapping (block.id, index); mp != nullptr && mp->toggle == 0 && prm.kind == Param::Kind::Float)
+    {
+        // expression pedal range: set the knob where you want it, then mark it as heel or toe
+        PopupMenu r;
+        r.addItem (10, "Pedal up (heel) = current setting  (now " + juce::String (juce::roundToInt (mp->lo * 100)) + "%)");
+        r.addItem (11, "Pedal down (toe) = current setting  (now " + juce::String (juce::roundToInt (mp->hi * 100)) + "%)");
+        r.addSeparator();
+        r.addItem (12, "Curve: straight", true, mp->curve == 0);
+        r.addItem (13, "Curve: slow start (fine control near the heel)", true, mp->curve == 1);
+        r.addItem (14, "Curve: fast start", true, mp->curve == 2);
+        r.addSeparator();
+        r.addItem (15, "Reset to full range");
+        m.addSubMenu ("Pedal range", r);
+    }
     Component::SafePointer<Component> safe (&target);
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&target), [&proc, &block, index, resetToDefault, safe] (int r)
     {
         if (r == 1) { proc.engine.armLearn (block.id, index); if (proc.onNotice) proc.onNotice ("Move or press the control on your MIDI device now..."); }
         if (r == 2) proc.engine.clearMappingsFor (block.id, index);
         if (r == 3 && resetToDefault) resetToDefault();
+        if (r == 10 || r == 11) { proc.engine.setMappingEnd (block.id, index, r == 11, block.params[(size_t) index]->getNorm()); proc.dirty = true; }
+        if (r >= 12 && r <= 14) { proc.engine.setMappingCurve (block.id, index, r - 12); proc.dirty = true; }
+        if (r == 15) { proc.engine.resetMappingRange (block.id, index); proc.dirty = true; }
         if (safe != nullptr) safe->repaint();
     });
 }

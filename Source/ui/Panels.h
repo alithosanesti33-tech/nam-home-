@@ -67,7 +67,20 @@ private:
     IconButton closeBtn { IconButton::Icon::Close, "Close settings" };
 
     // pages
-    juce::Component audioPage, midiPage, libraryPage, t3kPage, displayPage;
+    juce::Component audioPage, midiPage, libraryPage, t3kPage, displayPage, outputPage, setlistPage;
+    // output EQ (whole app, after everything) and spillover
+    juce::OwnedArray<ValueKnob> eqKnobs;
+    juce::ComboBox outProfile;
+    juce::Label outHelp;
+    juce::ToggleButton spill { "Let delay, reverb and freeze tails ring over when you change preset or scene" };
+    // setlists
+    juce::ComboBox setlistBox;
+    juce::TextButton newSetlist { "New setlist" }, addSong { "Add current preset" }, removeSong { "Remove" },
+                     learnPrev { "MIDI learn: previous song" }, learnNext { "MIDI learn: next song" }, songUp { "Move up" }, songDown { "Move down" }, loadSong { "Load" }, showSetlists { "Show setlists folder" };
+    juce::ListBox songList;
+    std::unique_ptr<juce::ListBoxModel> songModel;
+    juce::Label setlistHelp;
+    void refreshSetlists();
     juce::TextEditor t3kKey;
     juce::TextButton t3kSave { "Save key" }, t3kSignOut { "Sign out" }, t3kOpen { "Open TONE3000 settings" };
     juce::Label t3kHelp, t3kStatus;

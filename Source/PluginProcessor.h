@@ -56,10 +56,49 @@ public:
 
     // presets
     juce::String currentPreset;
+    std::vector<juce::String> undoStack, redoStack;
+    juce::String lastSnapshot;
+    double lastAutosave = 0;
+    juce::String lastAutosaved;
     bool dirty = false;
     juce::var rigToVar() const;
     void rigFromVar (const juce::var& v);
     bool loadPreset (const juce::String& name);
+
+    // ---- undo / redo (Cmd+Z, Cmd+Shift+Z): snapshots of the rig, taken when you pause editing
+    void snapshotIfChanged();
+    bool undo();
+    bool redo();
+    bool canUndo() const { return ! undoStack.empty(); }
+    bool canRedo() const { return ! redoStack.empty(); }
+
+    // ---- setlists: presets in song order, saved in your library folder (on your SSD)
+    juce::File setlistFolder() const { return library.getFolder().getChildFile ("Setlists"); }
+    juce::StringArray setlistNames() const;
+    juce::StringArray setlist;          // the active setlist's presets, in order
+    juce::String setlistName;
+    int setlistPos = -1;
+    void loadSetlist (const juce::String& name);
+    void saveSetlist() const;
+    bool stepSetlist (int delta);       // next / previous song (also from a footswitch)
+
+    // ---- level matching
+    float referenceLevelDb() const { return (float) appSettings->getDoubleValue ("levelRef", -20.0); }
+    void setReferenceLevel (float db) { appSettings->setValue ("levelRef", db); }
+    juce::String matchPresetLevel();    // sets this preset's trim so it plays at the reference level
+    juce::String matchScenesToA();      // every scene plays as loud as scene A
+
+    // ---- output EQ (the whole app) and profiles
+    static juce::StringArray outputProfileNames();
+    void applyOutputProfile (int index);
+    void setOutputEq (int band, float v);
+    void loadOutputSettings();
+
+    // ---- autosave and crash recovery
+    void autosaveTick();
+    bool crashedLastTime = false;
+    bool recoveredRig = false;     // the editor shows a note once
+    juce::File autosaveFile() const;
     bool savePreset (const juce::String& name);
     void newRig();
     void buildDefaultRig();

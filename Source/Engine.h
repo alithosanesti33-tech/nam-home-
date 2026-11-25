@@ -52,6 +52,18 @@ public:
 
     // ---- global controls
     std::atomic<float> inputGainDb { 0 }, outputGainDb { 0 };
+    // global output EQ (one EQ over everything, for headphones / monitors / PA). Not saved in presets.
+    // 0 low cut Hz, 1 low dB (100 Hz), 2 low-mid dB (400 Hz), 3 mid dB (1.5 kHz), 4 presence dB (4 kHz), 5 high dB (9 kHz shelf), 6 high cut Hz
+    std::atomic<float> outEq[7] { { 20 }, { 0 }, { 0 }, { 0 }, { 0 }, { 0 }, { 20000 } };
+    std::atomic<int> outEqVersion { 0 };
+    // level matching: each scene has a trim; the preset has one too. Loudness is measured while you play.
+    std::atomic<float> presetTrimDb { 0 };
+    std::atomic<float> sceneLoudness[8] { { -100 }, { -100 }, { -100 }, { -100 }, { -100 }, { -100 }, { -100 }, { -100 } };
+    std::atomic<float> presetLoudness { -100 };
+    float sceneTrim (int s) const;
+    void setSceneTrim (int s, float db);
+    // spillover: delay / reverb / freeze tails keep ringing for a few seconds after a preset change
+    std::atomic<bool> spilloverOn { true };
     std::atomic<bool> monoOut { false };
     std::atomic<bool> metronomeOn { false };
     std::atomic<float> metronomeLevelDb { -14 };
@@ -85,7 +97,14 @@ public:
         int kind = -1, number = 0;   // kind -1 = unused
         int blockId = 0, param = 0;  // param -1 = on/off; blockId -1 = tap tempo
         int toggle = 0;              // 1 = each press toggles / steps; 0 = follow the value
+        float lo = 0.0f, hi = 1.0f;  // expression pedal range: heel and toe positions of the control
+        int curve = 0;               // 0 linear, 1 slow start, 2 fast start
     };
+    // expression pedal ranges, set from the control's MIDI menu
+    void setMappingEnd (int blockId, int param, bool toe, float norm);
+    void setMappingCurve (int blockId, int param, int curve);
+    void resetMappingRange (int blockId, int param);
+    const Mapping* findMapping (int blockId, int param) const;
     static constexpr int maxMappings = 128;
     void armLearn (int blockId, int param);   // next MIDI message that arrives gets mapped here
     void cancelLearn() { learnArmed = false; learnStage = 0; }
@@ -105,6 +124,7 @@ public:
     {
         bool valid = false;
         juce::String name;
+        float trimDb = 0;
         std::map<int, std::pair<bool, std::vector<float>>> blocks;   // block id -> (on, knob values)
     };
     std::array<SceneState, numScenes> scenes;
@@ -114,6 +134,8 @@ public:
     void resetScenes();
     juce::String sceneLabel (int s) const;     // "A" or "A  Lead"
     static constexpr int sceneMidiId = -2;     // MIDI mapping target: blockId -2, param = scene
+    static constexpr int setlistMidiId = -3;   // blockId -3: param 0 = previous song, 1 = next song
+    std::atomic<int> setlistStepFromMidi { 0 };
 
     // ---- save / load
     juce::var toVar() const;
@@ -123,6 +145,8 @@ private:
     struct Plan
     {
         Block* cell[rows][cols] {};
+        Block* spill[8] {};
+        int numSpill = 0;
         int first[rows] {}, last[rows] {};
         bool active[rows] {};
     };
@@ -148,6 +172,14 @@ private:
     int maxBlock = 512;
     std::vector<float> buf[rows][2];
     std::vector<float> cleanBuf[2];
+    std::vector<float> spillBuf[2];
+    std::vector<std::shared_ptr<Block>> spillBlocks;
+    double spillStarted = 0;
+    std::atomic<float> spillGain { 0 };
+    float trimSm = 1.0f;
+    ndsp::Biquad eqF[2][7];
+    int eqVersionSeen = -1;
+    bool eqActive = false;
     juce::AudioProcessLoadMeasurer loadMeasurer;
 
     ndsp::PitchShifter shifter[2];

@@ -319,8 +319,8 @@ static Label* styleLabel (Label& l, const String& text, float size = 13.0f, Colo
 
 SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : proc (p), deviceManager (dm)
 {
-    const char* pages[] = { "Audio", "MIDI", "Library", "TONE3000", "Display" };
-    for (int i = 0; i < 5; ++i)
+    const char* pages[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists" };
+    for (int i = 0; i < 7; ++i)
     {
         auto* b = nav.add (new TextButton (pages[i]));
         b->setClickingTogglesState (true);
@@ -424,13 +424,120 @@ SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : pro
     for (auto* c : std::initializer_list<Component*> { &zoom, &fontSize, &fullscreen })
         displayPage.addAndMakeVisible (c);
 
-    for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage })
+    // ---- Output: a final EQ for whatever you're playing through, and spillover
+    outputPage.addAndMakeVisible (styleLabel (outHelp,
+        "This EQ shapes everything NAM Home sends out, after the whole chain and every preset. "
+        "Use it to fit your presets to headphones, studio monitors or a PA without touching the presets themselves."));
+    {
+        const char* names[] = { "Low cut", "Bass", "Low mid", "Mid", "Presence", "Air", "High cut" };
+        const float lo[] = { 20, -12, -12, -12, -12, -12, 3000 }, hi[] = { 300, 12, 12, 12, 12, 12, 20000 }, def[] = { 20, 0, 0, 0, 0, 0, 20000 };
+        for (int k = 0; k < 7; ++k)
+        {
+            auto* kn = eqKnobs.add (new ValueKnob (names[k], lo[k], hi[k], def[k], (k == 0 || k == 6) ? "Hz" : "dB",
+                [this, k] { return proc.engine.outEq[k].load(); },
+                [this, k] (float v) { proc.setOutputEq (k, v); outProfile.setSelectedId (99, dontSendNotification); },
+                Colour (0xff5dbb63)));
+            if (k == 0 || k == 6) kn->slider.setSkewFactorFromMidPoint (k == 0 ? 80.0 : 8000.0);
+            outputPage.addAndMakeVisible (kn);
+        }
+    }
+    {
+        int id = 1;
+        for (auto& n : NAMHomeProcessor::outputProfileNames()) outProfile.addItem (n, id++);
+        outProfile.addItem ("Custom", 99);
+        outProfile.setSelectedId (proc.settings().getIntValue ("outProfile", 1), dontSendNotification);
+        outProfile.onChange = [this]
+        {
+            const int id = outProfile.getSelectedId();
+            if (id == 99) return;
+            proc.applyOutputProfile (id - 1);
+            for (auto* k : eqKnobs) k->sync();
+        };
+        outputPage.addAndMakeVisible (outProfile);
+    }
+    spill.setToggleState (proc.engine.spilloverOn.load(), dontSendNotification);
+    spill.onClick = [this] { proc.engine.spilloverOn = spill.getToggleState(); proc.settings().setValue ("spillover", spill.getToggleState()); };
+    outputPage.addAndMakeVisible (spill);
+
+    // ---- Setlists
+    struct SongModel : public ListBoxModel
+    {
+        NAMHomeProcessor& p; explicit SongModel (NAMHomeProcessor& pp) : p (pp) {}
+        int getNumRows() override { return p.setlist.size(); }
+        void paintListBoxItem (int row, Graphics& g, int w, int h, bool sel) override
+        {
+            if (sel) { g.setColour (theme::hover); g.fillRoundedRectangle (2.0f, 1.0f, (float) w - 4, (float) h - 2, 6.0f); }
+            const bool current = p.setlist[row] == p.currentPreset;
+            g.setColour (theme::muted); g.setFont (theme::font (12.0f, 1));
+            g.drawText (String (row + 1), 8, 0, 26, h, Justification::centredRight);
+            g.setColour (current ? theme::accent : theme::text); g.setFont (theme::font (14.0f, current ? 2 : 0));
+            g.drawText (p.setlist[row], 44, 0, w - 52, h, Justification::centredLeft);
+        }
+        void listBoxItemDoubleClicked (int row, const MouseEvent&) override { p.setlistPos = row; p.loadPreset (p.setlist[row]); }
+    };
+    songModel = std::make_unique<SongModel> (proc);
+    songList.setModel (songModel.get());
+    songList.setRowHeight (30);
+    songList.setColour (ListBox::backgroundColourId, theme::panel);
+    setlistPage.addAndMakeVisible (styleLabel (setlistHelp,
+        "Put presets in song order. Cmd + Left / Right (or a footswitch learned to \"Next song\" / \"Previous song\" below) steps through them. "
+        "Setlists are saved in your library folder, on your SSD."));
+    setlistBox.onChange = [this]
+    {
+        proc.loadSetlist (setlistBox.getSelectedId() <= 1 ? String() : setlistBox.getText());
+        songList.updateContent(); songList.repaint();
+    };
+    newSetlist.onClick = [this]
+    {
+        auto* aw = new AlertWindow ("New setlist", {}, MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", "", "Name");
+        aw->addButton ("Create", 1, KeyPress (KeyPress::returnKey));
+        aw->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+        aw->enterModalState (true, ModalCallbackFunction::create ([this, aw] (int res)
+        {
+            const auto n = File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+            if (res != 1 || n.isEmpty()) return;
+            proc.setlistName = n; proc.setlist.clear(); proc.saveSetlist();
+            proc.loadSetlist (n);
+            refreshSetlists();
+        }), true);
+    };
+    auto edit = [this] (std::function<void (int)> f)
+    {
+        if (proc.setlistName.isEmpty()) { if (proc.onNotice) proc.onNotice ("Make or pick a setlist first."); return; }
+        f (songList.getSelectedRow());
+        proc.saveSetlist();
+        songList.updateContent(); songList.repaint();
+    };
+    addSong.onClick = [this, edit] { edit ([this] (int) { if (proc.currentPreset.isNotEmpty()) proc.setlist.add (proc.currentPreset); else if (proc.onNotice) proc.onNotice ("Save the current rig as a preset first."); }); };
+    removeSong.onClick = [this, edit] { edit ([this] (int r) { if (r >= 0) proc.setlist.remove (r); }); };
+    songUp.onClick = [this, edit] { edit ([this] (int r) { if (r > 0) { proc.setlist.move (r, r - 1); songList.selectRow (r - 1); } }); };
+    songDown.onClick = [this, edit] { edit ([this] (int r) { if (r >= 0 && r < proc.setlist.size() - 1) { proc.setlist.move (r, r + 1); songList.selectRow (r + 1); } }); };
+    loadSong.onClick = [this] { const int r = songList.getSelectedRow(); if (r >= 0) { proc.setlistPos = r; proc.loadPreset (proc.setlist[r]); songList.repaint(); } };
+    learnPrev.onClick = [this] { proc.engine.armLearn (Engine::setlistMidiId, 0); if (proc.onNotice) proc.onNotice ("Press the footswitch for the previous song..."); };
+    learnNext.onClick = [this] { proc.engine.armLearn (Engine::setlistMidiId, 1); if (proc.onNotice) proc.onNotice ("Press the footswitch for the next song..."); };
+    showSetlists.onClick = [this] { proc.setlistFolder().createDirectory(); proc.setlistFolder().revealToUser(); };
+    for (auto* c : std::initializer_list<Component*> { &setlistBox, &newSetlist, &learnPrev, &learnNext, &addSong, &removeSong, &songUp, &songDown, &loadSong, &showSetlists, &songList })
+        setlistPage.addAndMakeVisible (c);
+    refreshSetlists();
+
+    for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage, &outputPage, &setlistPage })
         addChildComponent (pg);
     showPage (0);
     startTimerHz (5);
 }
 
-SettingsSheet::~SettingsSheet() { stopTimer(); }
+SettingsSheet::~SettingsSheet() { stopTimer(); songList.setModel (nullptr); }
+
+void SettingsSheet::refreshSetlists()
+{
+    setlistBox.clear (dontSendNotification);
+    setlistBox.addItem ("No setlist (presets in A-Z order)", 1);
+    int id = 2, sel = 1;
+    for (auto& n : proc.setlistNames()) { if (n == proc.setlistName) sel = id; setlistBox.addItem (n, id++); }
+    setlistBox.setSelectedId (sel, dontSendNotification);
+    songList.updateContent(); songList.repaint();
+}
 
 void SettingsSheet::buildMidiList()
 {
@@ -470,6 +577,8 @@ void SettingsSheet::showPage (int pg)
     libraryPage.setVisible (pg == 2);
     t3kPage.setVisible (pg == 3);
     displayPage.setVisible (pg == 4);
+    outputPage.setVisible (pg == 5);
+    setlistPage.setVisible (pg == 6);
     repaint();
 }
 
@@ -497,7 +606,7 @@ void SettingsSheet::paint (Graphics& g)
     g.setColour (theme::text);
     g.setFont (theme::font (20.0f, 2));
     g.drawText ("Settings", (int) c.getX() + 24, (int) c.getY() + 22, 160, 28, Justification::centredLeft);
-    const char* titles[] = { "Audio", "MIDI", "Library", "TONE3000", "Display" };
+    const char* titles[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists" };
     g.drawText (titles[page], (int) c.getX() + 228, (int) c.getY() + 22, 400, 28, Justification::centredLeft);
 }
 
@@ -508,8 +617,36 @@ void SettingsSheet::resized()
     auto navArea = c.withWidth (200).reduced (14, 0).withTrimmedTop (70);
     for (auto* b : nav) { b->setBounds (navArea.removeFromTop (38)); navArea.removeFromTop (4); }
     auto content = c.withTrimmedLeft (220).withTrimmedTop (66).reduced (8, 16).withTrimmedRight (16);
-    for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage })
+    for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage, &outputPage, &setlistPage })
         pg->setBounds (content);
+
+    // output
+    {
+        auto o = outputPage.getLocalBounds();
+        outHelp.setBounds (o.removeFromTop (60));
+        o.removeFromTop (6);
+        outProfile.setBounds (o.removeFromTop (32).withWidth (300));
+        o.removeFromTop (14);
+        auto kr = o.removeFromTop (108);
+        for (auto* k : eqKnobs) k->setBounds (kr.removeFromLeft (jmin (92, kr.getWidth() / 7 + 1)));
+        o.removeFromTop (16);
+        spill.setBounds (o.removeFromTop (34).withWidth (600));
+    }
+    // setlists
+    {
+        auto st = setlistPage.getLocalBounds();
+        setlistHelp.setBounds (st.removeFromTop (56));
+        auto top = st.removeFromTop (32);
+        setlistBox.setBounds (top.removeFromLeft (300)); top.removeFromLeft (10);
+        newSetlist.setBounds (top.removeFromLeft (120)); top.removeFromLeft (10);
+        showSetlists.setBounds (top.removeFromLeft (170));
+        st.removeFromTop (12);
+        auto side = st.removeFromRight (170);
+        songList.setBounds (st.withTrimmedRight (12));
+        for (auto* b : { &addSong, &loadSong, &songUp, &songDown, &removeSong }) { b->setBounds (side.removeFromTop (32)); side.removeFromTop (8); }
+        side.removeFromTop (14);
+        for (auto* b : { &learnPrev, &learnNext }) { b->setBounds (side.removeFromTop (32)); side.removeFromTop (8); }
+    }
 
     // audio
     auto a = audioPage.getLocalBounds();

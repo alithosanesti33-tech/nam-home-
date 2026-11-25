@@ -423,6 +423,9 @@ void NAMHomeEditor::timerCallback()
         if (presetBtn.getButtonText() != title) presetBtn.setButtonText (title);
         tempo.repaint();
         repaint (topBar);
+        // undo history: take a snapshot when you've let go of the mouse
+        if (! ModifierKeys::currentModifiers.isAnyMouseButtonDown()) proc.snapshotIfChanged();
+        if (proc.recoveredRig) { proc.recoveredRig = false; message ("NAM Home closed unexpectedly last time, so your last rig was restored."); }
     }
     static bool wasLearning = false;
     const bool learning = proc.engine.isLearning();
@@ -444,6 +447,20 @@ bool NAMHomeEditor::keyPressed (const KeyPress& k)
         closeDrawer(); return true;
     }
     if (k == KeyPress ('s', ModifierKeys::commandModifier, 0)) { saveBtn.triggerClick(); return true; }
+    if (k == KeyPress ('z', ModifierKeys::commandModifier | ModifierKeys::shiftModifier, 0)
+        || k == KeyPress ('y', ModifierKeys::commandModifier, 0))
+    {
+        if (proc.redo()) { closeDrawer(); refreshAll(); message ("Redo"); }
+        return true;
+    }
+    if (k == KeyPress ('z', ModifierKeys::commandModifier, 0))
+    {
+        if (proc.undo()) { closeDrawer(); refreshAll(); message ("Undo"); }
+        else message ("Nothing to undo.");
+        return true;
+    }
+    if (k == KeyPress::leftKey && k.getModifiers().isCommandDown()) { if (proc.stepSetlist (-1)) refreshAll(); return true; }
+    if (k == KeyPress::rightKey && k.getModifiers().isCommandDown()) { if (proc.stepSetlist (+1)) refreshAll(); return true; }
     if (k == KeyPress ('f', ModifierKeys::commandModifier | ModifierKeys::ctrlModifier, 0)) { toggleFullscreen(); return true; }
     auto sel = proc.engine.get (grid.selected.y, grid.selected.x);
     if ((k == KeyPress::deleteKey || k == KeyPress::backspaceKey) && sel != nullptr) { grid.removeAt (grid.selected); return true; }
