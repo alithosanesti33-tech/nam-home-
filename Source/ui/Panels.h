@@ -72,7 +72,8 @@ private:
     juce::OwnedArray<ValueKnob> eqKnobs;
     juce::ComboBox outProfile;
     juce::Label outHelp;
-    juce::ToggleButton spill { "Let delay, reverb and freeze tails ring over when you change preset (scenes: use each block's Trails switch)" };
+    juce::ToggleButton spill { "Let delay, reverb and freeze tails ring over when you change preset" };
+    juce::ToggleButton cutScene { "Cut delay, reverb and freeze tails when you change scenes" };
     // setlists
     juce::ComboBox setlistBox;
     juce::TextButton newSetlist { "New setlist" }, addSong { "Add current preset" }, removeSong { "Remove" },

@@ -1128,6 +1128,8 @@ void FreezeBlock::process (float* L, float* R, int n)
     if (! holding && level <= 0.0f) haveFrozen = false;
 }
 
+bool FreezeBlock::canCutTail() const { return p (fHold) < 0.5f; }   // still held in the new scene: keep it
+
 std::vector<Block::StartingPoint> FreezeBlock::startingPoints() const
 {
     const char* holdTip = "Right-click Hold and choose MIDI learn to put it on a footswitch.";

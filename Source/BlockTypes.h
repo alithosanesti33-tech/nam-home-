@@ -529,6 +529,7 @@ class FreezeBlock : public Block
 public:
     FreezeBlock();
     bool hasTails() const override { return true; }
+    bool canCutTail() const override;
     std::vector<StartingPoint> startingPoints() const override;
 protected:
     void prepare (double sr, int maxBlock) override;

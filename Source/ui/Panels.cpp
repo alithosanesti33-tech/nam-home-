@@ -459,6 +459,9 @@ SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : pro
     spill.setToggleState (proc.engine.spilloverOn.load(), dontSendNotification);
     spill.onClick = [this] { proc.engine.spilloverOn = spill.getToggleState(); proc.settings().setValue ("spillover", spill.getToggleState()); };
     outputPage.addAndMakeVisible (spill);
+    cutScene.setToggleState (proc.engine.cutTailsOnScene.load(), dontSendNotification);
+    cutScene.onClick = [this] { proc.engine.cutTailsOnScene = cutScene.getToggleState(); proc.settings().setValue ("cutSceneTails", cutScene.getToggleState()); };
+    outputPage.addAndMakeVisible (cutScene);
 
     // ---- Setlists
     struct SongModel : public ListBoxModel
@@ -632,6 +635,7 @@ void SettingsSheet::resized()
         for (auto* k : eqKnobs) k->setBounds (kr.removeFromLeft (jmin (92, kr.getWidth() / 7 + 1)));
         o.removeFromTop (16);
         spill.setBounds (o.removeFromTop (34).withWidth (600));
+        cutScene.setBounds (o.removeFromTop (34).withWidth (600));
     }
     // setlists
     {

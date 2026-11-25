@@ -122,6 +122,10 @@ void Engine::selectScene (int s)
     currentScene = s;
     if (scenes[(size_t) s].valid) applyScene (scenes[(size_t) s]);
     else captureScene (scenes[(size_t) s]);   // a new scene starts as a copy of where you are
+    if (cutTailsOnScene.load())
+        for (auto& row : cells)
+            for (auto& b : row)
+                if (b != nullptr && b->hasTails()) b->cutTail = true;
     ++sceneVersion;
 }
 

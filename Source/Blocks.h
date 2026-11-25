@@ -107,6 +107,8 @@ public:
 
     virtual void reset() {}
     virtual bool hasTails() const { return false; }
+    virtual bool canCutTail() const { return true; }   // e.g. a held freeze keeps going
+    std::atomic<bool> cutTail { false };              // set on a scene change: drop the echoes / reverb tail now
 
     // ready-made settings for this block ("Saturn's Ring", "Smooth soprano"...), from the settings panel
     struct StartingPoint { juce::String name, note; std::vector<std::pair<const char*, float>> values; };
@@ -141,7 +143,7 @@ protected:
     bool prepared = false;
 
 private:
-    std::vector<float> dryL, dryR, zL, zR;
+    std::vector<float> dryL, dryR, zL, zR, cutL, cutR;
     float fade = 1.0f;
     bool wasEnabled = true;
     Param* trailsParam = nullptr;

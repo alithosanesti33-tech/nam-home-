@@ -64,6 +64,7 @@ public:
     void setSceneTrim (int s, float db);
     // spillover: delay / reverb / freeze tails keep ringing for a few seconds after a preset change
     std::atomic<bool> spilloverOn { true };
+    std::atomic<bool> cutTailsOnScene { false };   // scene changes drop delay / reverb / freeze tails
     std::atomic<bool> monoOut { false };
     std::atomic<bool> metronomeOn { false };
     std::atomic<float> metronomeLevelDb { -14 };

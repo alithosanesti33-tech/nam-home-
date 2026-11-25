@@ -93,7 +93,7 @@ void Block::prepareBlock (double sr, int maxBlockSize)
     prepared = true;
     sampleRate = (float) sr;
     maxBlock = juce::jmax (32, maxBlockSize);
-    for (auto* v : { &dryL, &dryR, &zL, &zR }) v->assign ((size_t) maxBlock, 0.0f);
+    for (auto* v : { &dryL, &dryR, &zL, &zR, &cutL, &cutR }) v->assign ((size_t) maxBlock, 0.0f);
     prepare (sr, maxBlock);
 }
 
@@ -105,7 +105,25 @@ void Block::run (float* L, float* R, int n)
         auto& tap = SpectrumTap::get (t);
         if (tap.on.load() && tap.where.load() == SpectrumTap::BeforeBlock && tap.blockId.load() == id) tap.push (L, R, n);
     }
-    runInner (L, R, n);
+    if (cutTail.exchange (false) && hasTails() && canCutTail())
+    {
+        // drop the tail without a click: run once as it was, once cleared, and crossfade between them
+        std::copy (L, L + n, cutL.begin());
+        std::copy (R, R + n, cutR.begin());
+        const float fadeWas = fade;
+        runInner (cutL.data(), cutR.data(), n);
+        fade = fadeWas;
+        reset();
+        runInner (L, R, n);
+        for (int i = 0; i < n; ++i)
+        {
+            const float t = (float) (i + 1) / (float) n;
+            L[i] = cutL[(size_t) i] + (L[i] - cutL[(size_t) i]) * t;
+            R[i] = cutR[(size_t) i] + (R[i] - cutR[(size_t) i]) * t;
+        }
+    }
+    else
+        runInner (L, R, n);
     for (int t = 0; t < 2; ++t)
     {
         auto& tap = SpectrumTap::get (t);

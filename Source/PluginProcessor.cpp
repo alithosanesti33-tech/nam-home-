@@ -132,6 +132,7 @@ void NAMHomeProcessor::loadOutputSettings()
     for (int k = 0; k < 7; ++k) engine.outEq[k] = (float) appSettings->getDoubleValue ("outEq" + juce::String (k), def[k]);
     ++engine.outEqVersion;
     engine.spilloverOn = appSettings->getBoolValue ("spillover", true);
+    engine.cutTailsOnScene = appSettings->getBoolValue ("cutSceneTails", false);
 }
 
 juce::File NAMHomeProcessor::autosaveFile() const
