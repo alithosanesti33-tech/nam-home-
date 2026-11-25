@@ -40,7 +40,8 @@ public:
     enum class Type
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
-        GraphicEQ, ParametricEQ, Delay, Reverb, Modulation, TriChorus, Utility, PhatTrack, Sax, NumTypes
+        GraphicEQ, ParametricEQ, Delay, Reverb, Modulation, TriChorus, Utility, PhatTrack, Sax,
+        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, NumTypes
     };
 
     explicit Block (Type t);

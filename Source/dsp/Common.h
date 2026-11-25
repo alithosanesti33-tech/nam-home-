@@ -226,12 +226,12 @@ inline float syncToMs (int choice, float bpm)
 // alignment search (a few ms for typical drop tunings). Bypassed entirely when the ratio is 1.
 struct PitchShifter
 {
-    void prepare (float sr)
+    void prepare (float sr, float grainSeconds = 0.040f, float maxSeconds = 0.120f)
     {
         rate = sr;
-        grain = 0.040f * sr;
+        grain = grainSeconds * sr;
         search = (int) (0.012f * sr);
-        line.setMaxSamples ((int) (0.120f * sr));
+        line.setMaxSamples ((int) (maxSeconds * sr));
         clear();
     }
     void clear() { line.clear(); ph[0] = 0.0f; ph[1] = 0.5f; d[0] = d[1] = 4.0f; }

@@ -409,7 +409,8 @@ void GridView::addBlockAt (Block::Type t, Point<int> cell, int variant)
 {
     auto b = proc.engine.addBlock (t, cell.y, cell.x);
     if (auto* sax = dynamic_cast<SaxBlock*> (b.get())) sax->setModel (juce::jmax (0, variant));
-    if (t == Block::Type::Delay || t == Block::Type::Reverb || t == Block::Type::Modulation || t == Block::Type::TriChorus)
+    if (t == Block::Type::Delay || t == Block::Type::Reverb || t == Block::Type::Modulation || t == Block::Type::TriChorus
+        || t == Block::Type::Chorus || t == Block::Type::Flanger || t == Block::Type::Doubler)
         if (cell.y > 0)
             if (auto* kd = b->param ("killDry")) { kd->set (1.0f); if (auto* mx = b->param ("mix")) mx->set (100.0f); }   // parallel rows: wet only
     proc.dirty = true;

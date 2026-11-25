@@ -186,6 +186,18 @@ juce::String Block::typeName (Type t)
         case Type::Utility:      return "Utility";
         case Type::PhatTrack:    return "PhatTrack";
         case Type::Sax:          return "Saxophone";
+        case Type::Chorus:       return "Chorus";
+        case Type::Phaser:       return "Phaser";
+        case Type::Flanger:      return "Flanger";
+        case Type::Whammy:       return "Whammy";
+        case Type::Octave:       return "Octave";
+        case Type::Harmonizer:   return "Harmonizer";
+        case Type::EnvFilter:    return "Envelope filter";
+        case Type::Swell:        return "Auto-swell";
+        case Type::Doubler:      return "Doubler";
+        case Type::Fuzz:         return "Fuzz";
+        case Type::ATDrive:      return "@ Drive";
+        case Type::Freeze:       return "Freeze";
         case Type::NumTypes:     break;
     }
     return {};
@@ -196,7 +208,8 @@ juce::String Block::categoryName (Type t)
     switch (t)
     {
         case Type::NamAmp: return "Amps";
-        case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor: return "Pedals";
+        case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor:
+        case Type::Whammy: case Type::Octave: case Type::EnvFilter: case Type::Swell: case Type::Fuzz: case Type::ATDrive: return "Pedals";
         case Type::Cab: return "Cabs";
         case Type::GraphicEQ: case Type::ParametricEQ: return "EQ";
         case Type::Gate: case Type::Utility: return "Utility";
@@ -213,6 +226,7 @@ juce::Colour Block::colour (Type t)
         case Type::NamAmp:       return juce::Colour (0xff2fb5a8);
         case Type::Cab:          return juce::Colour (0xff9b7be0);
         case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor:
+        case Type::Whammy: case Type::Octave: case Type::EnvFilter: case Type::Swell: case Type::Fuzz: case Type::ATDrive:
                                  return juce::Colour (0xffe0a030);
         case Type::GraphicEQ: case Type::ParametricEQ:
                                  return juce::Colour (0xff5dbb63);
@@ -245,6 +259,18 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Utility:      return std::make_unique<UtilityBlock>();
         case Type::PhatTrack:    return std::make_unique<PhatTrackBlock>();
         case Type::Sax:          return std::make_unique<SaxBlock>();
+        case Type::Chorus:       return std::make_unique<ChorusBlock>();
+        case Type::Phaser:       return std::make_unique<PhaserBlock>();
+        case Type::Flanger:      return std::make_unique<FlangerBlock>();
+        case Type::Whammy:       return std::make_unique<WhammyBlock>();
+        case Type::Octave:       return std::make_unique<OctaveBlock>();
+        case Type::Harmonizer:   return std::make_unique<HarmonizerBlock>();
+        case Type::EnvFilter:    return std::make_unique<EnvFilterBlock>();
+        case Type::Swell:        return std::make_unique<SwellBlock>();
+        case Type::Doubler:      return std::make_unique<DoublerBlock>();
+        case Type::Fuzz:         return std::make_unique<FuzzBlock>();
+        case Type::ATDrive:      return std::make_unique<ATDriveBlock>();
+        case Type::Freeze:       return std::make_unique<FreezeBlock>();
         case Type::NumTypes:     break;
     }
     return nullptr;

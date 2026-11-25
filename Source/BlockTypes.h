@@ -107,10 +107,11 @@ public:
     CompressorBlock();
     std::atomic<float> reductionDb { 0 };
 protected:
-    void prepare (double, int) override { envDb = -100; grDb = 0; }
+    void prepare (double, int) override { envDb = -100; grDb = 0; sustained = 0; }
     void process (float* L, float* R, int n) override;
 private:
-    float envDb = -100, grDb = 0;
+    void processFet (float* L, float* R, int n);
+    float envDb = -100, grDb = 0, sustained = 0;
 };
 
 class DriveBlock : public Block
@@ -207,7 +208,7 @@ class DelayBlock : public Block
 public:
     DelayBlock();
     bool hasTails() const override { return true; }
-    enum Kind { Digital, Tape, Analog, PingPong, Dual, Reverse, MultiTap, Swell };
+    enum Kind { Digital, Tape, Analog, PingPong, Dual, Reverse, MultiTap, Swell, Crystal };
 protected:
     void prepare (double sr, int maxBlock) override;
     void reset() override;
@@ -223,6 +224,8 @@ private:
     float swellGain = 0, swellLastEnv = 0;
     float revPhase[2] = { 0, 0 };
     float fbState[2] = { 0, 0 };
+    ndsp::PitchShifter pitchSh[2];
+    float pitchRatio[2] = { 1, 1 }, crystalRaw[2] = { 0, 0 };
     juce::Random rng;
 };
 
@@ -351,4 +354,198 @@ private:
     float fold = 0, glideOff = 0, scoopOff = 0, fallOff = 0, fallTarget = 0;
     float breath = 0, bite = 0, tongue = 0, noteVel = 0.7f, noteTime = 0, vibPhase = 0, vibFromGuitar = 0, dipEnv = 0;
     float lastPitch = 60.0f, outPitch = 60.0f;
+};
+
+//==============================================================================
+// More effects (Effects2.cpp)
+
+// Chorus models: warm analog, Dimension-style, 80s stereo rack, ensemble, detune.
+class ChorusBlock : public Block
+{
+public:
+    ChorusBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::DelayLine line[2];
+    ndsp::Biquad bbdLp[2], preHp[2];
+    float ph[6] {};
+    ndsp::Wander wander[4];
+};
+
+// Phasers: small orange pedal, script, big stereo studio phaser.
+class PhaserBlock : public Block
+{
+public:
+    PhaserBlock();
+protected:
+    void prepare (double, int) override { reset(); }
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    struct AP1 { float z = 0; inline float process (float x, float a) { const float y = a * x + z; z = x - a * y; return y; } };
+    AP1 ap[2][12];
+    float fb[2] {}, ph = 0;
+};
+
+// Flangers: jet, filter-matrix, through-zero tape.
+class FlangerBlock : public Block
+{
+public:
+    FlangerBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::DelayLine line[2], ref[2];
+    float fb[2] {}, ph = 0;
+    ndsp::Biquad hp[2];
+};
+
+// Whammy: two octaves up and down from an expression pedal or MIDI.
+class WhammyBlock : public Block
+{
+public:
+    WhammyBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override { for (auto& s : shifter) s.clear(); posSm = -1; }
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::PitchShifter shifter[2];
+    float posSm = -1;
+};
+
+// Polyphonic octave (Micro POG style): sub octave, octave up and dry, with a filter.
+class OctaveBlock : public Block
+{
+public:
+    OctaveBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    static constexpr int bands = 28;
+    struct Band { float cr = 0, ci = 0, zr = 0, zi = 0, gain = 1, lastPh = 0, unwrapped = 0, env = 0; };
+    Band band[bands];
+    float bandFreq[bands] {};
+    ndsp::Biquad lp, hp, subLp;
+};
+
+// Harmonizer: one or two voices that stay in key.
+class HarmonizerBlock : public Block
+{
+public:
+    HarmonizerBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::GuitarTracker tracker;
+    ndsp::PitchShifter voice[2];
+    float ratioSm[2] { 1, 1 };
+    int heldNote = -1;
+};
+
+// Envelope filter (auto-wah).
+class EnvFilterBlock : public Block
+{
+public:
+    EnvFilterBlock();
+protected:
+    void prepare (double, int) override { reset(); }
+    void reset() override { for (auto& f : svf) f.reset(); env = 0; }
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::SVF svf[2];
+    float env = 0;
+};
+
+// Auto-swell: fades each note in.
+class SwellBlock : public Block
+{
+public:
+    SwellBlock();
+protected:
+    void prepare (double, int) override { reset(); }
+    void reset() override { fast = slow = gain = 0; cooldown = 0; }
+    void process (float* L, float* R, int n) override;
+private:
+    float fast = 0, slow = 0, gain = 0; int cooldown = 0;
+};
+
+// Doubler: a fake second take.
+class DoublerBlock : public Block
+{
+public:
+    DoublerBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override { line.clear(); }
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::DelayLine line;
+    ndsp::Wander drift[2];
+    ndsp::Biquad tone[2];
+};
+
+// Fuzz: Big Muff style and Fuzz Face style.
+class FuzzBlock : public Block
+{
+public:
+    FuzzBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void process (float* L, float* R, int n) override;
+private:
+    std::unique_ptr<juce::dsp::Oversampling<float>> os;
+    ndsp::Biquad inHp[2], muffLp[2], muffHp[2], faceLp[2], post[2];
+    ndsp::OnePole stageLp[2][2];
+    ndsp::Smoothed level;
+    float biasEnv[2] {};
+};
+
+// "@ Drive": Andy Timmons style British crunch with 25/50/100 W headroom and a TS boost.
+class ATDriveBlock : public Block
+{
+public:
+    ATDriveBlock();
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void process (float* L, float* R, int n) override;
+private:
+    void updateFilters();
+    std::unique_ptr<juce::dsp::Oversampling<float>> os;
+    ndsp::Biquad tight[2], mid[2], eq[2], air[2], boostHp[2], boostMid[2], post[2];
+    ndsp::OnePole interLp[2][2];
+    ndsp::Smoothed level, drive;
+    float sag[2] {};
+    float lastEq = -1, lastAir = -1, lastHead = -1;
+};
+
+// Freeze (NightSky inspired): hold what you played, keep only the notes you choose, or drone on them.
+class FreezeBlock : public Block
+{
+public:
+    FreezeBlock();
+    bool hasTails() const override { return true; }
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    static constexpr int order = 13, fftSize = 1 << order, hop = fftSize / 4;
+    void capture (bool add);
+    void synthFrame();
+    std::unique_ptr<juce::dsp::FFT> fft;
+    std::vector<float> inRing, window, mag, frozen, work, outAcc[2], phase[2], noteWeight, envSmooth;
+    int inPos = 0, hopCount = 0, outRead = 0;
+    bool holding = false, haveFrozen = false;
+    float level = 0, lastNoteSet = -1;
+    juce::Random rng;
 };

@@ -46,20 +46,31 @@ void GateBlock::process (float* L, float* R, int n)
 // Compressor (feed-forward, soft knee)
 CompressorBlock::CompressorBlock() : Block (Type::Compressor)
 {
-    addFloat ("threshold", "Threshold", -60, 0, -18, "dB", -20, 0.5f);
-    addFloat ("ratio", "Ratio", 1, 20, 4, "x", 4, 0.1f);
-    addFloat ("attack", "Attack", 0.1f, 100, 8, "ms", 10);
-    addFloat ("release", "Release", 10, 1000, 150, "ms", 150);
-    addFloat ("knee", "Knee", 0, 12, 6, "dB", -1, 0.5f);
-    addFloat ("makeup", "Makeup", 0, 24, 0, "dB", -1, 0.5f);
-    addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1);
+    addChoice ("model", "Model", { "Studio", "FET '76" }, 0);
+    auto studio = [] (const Block& b) { return b.params[0]->getInt() == 0; };
+    auto fet = [] (const Block& b) { return b.params[0]->getInt() == 1; };
+    addFloat ("threshold", "Threshold", -60, 0, -18, "dB", -20, 0.5f).visible = studio;
+    addFloat ("ratio", "Ratio", 1, 20, 4, "x", 4, 0.1f).visible = studio;
+    addFloat ("attack", "Attack", 0.1f, 100, 8, "ms", 10).visible = studio;
+    addFloat ("release", "Release", 10, 1000, 150, "ms", 150).visible = studio;
+    addFloat ("knee", "Knee", 0, 12, 6, "dB", -1, 0.5f).visible = studio;
+    addFloat ("makeup", "Makeup", 0, 24, 0, "dB", -1, 0.5f).visible = studio;
+    addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1).visible = studio;
+    // FET '76 (Cali76 / 1176 style): fixed threshold, In drives into it, Out is makeup, Dry blends in
+    addFloat ("in", "In", 0, 40, 14, "dB", -1, 0.1f).visible = fet;
+    addFloat ("out", "Out", -30, 12, -4, "dB", -1, 0.1f).visible = fet;
+    addChoice ("fetRatio", "Ratio", { "4:1", "8:1", "12:1", "20:1", "All buttons" }, 1).visible = fet;
+    addFloat ("fetAttack", "Attack", 0.02f, 10, 1.5f, "ms", 1, 0.01f).visible = fet;
+    addFloat ("fetRelease", "Release", 50, 1100, 200, "ms", 250, 1).visible = fet;
+    addFloat ("dry", "Dry", 0, 100, 0, "%", -1, 1).visible = fet;
 }
 
 void CompressorBlock::process (float* L, float* R, int n)
 {
-    const float thr = p (0), ratio = p (1), knee = p (4), makeup = p (5), mix = p (6) * 0.01f;
-    const float aC = std::exp (-1.0f / (0.001f * p (2) * sampleRate));
-    const float rC = std::exp (-1.0f / (0.001f * p (3) * sampleRate));
+    if ((int) p (0) == 1) { processFet (L, R, n); return; }
+    const float thr = p (1), ratio = p (2), knee = p (5), makeup = p (6), mix = p (7) * 0.01f;
+    const float aC = std::exp (-1.0f / (0.001f * p (3) * sampleRate));
+    const float rC = std::exp (-1.0f / (0.001f * p (4) * sampleRate));
     const float slope = 1.0f / ratio - 1.0f;
     float maxGr = 0;
 
@@ -77,6 +88,57 @@ void CompressorBlock::process (float* L, float* R, int n)
         const float g = std::exp ((grDb + makeup) * 0.11512925f);
         L[i] = L[i] * (1 - mix) + L[i] * g * mix;
         R[i] = R[i] * (1 - mix) + R[i] * g * mix;
+        maxGr = std::min (maxGr, grDb);
+    }
+    reductionDb = maxGr;
+}
+
+// 1176-style FET compression: feedback detection from the output, very fast attack, a release
+// that recovers faster after short peaks than after long held notes, the ratio nudging the
+// threshold up like the hardware, a touch of FET colour, and a Dry knob for parallel compression.
+void CompressorBlock::processFet (float* L, float* R, int n)
+{
+    const float inG = dbToGain (p (8)), outG = dbToGain (p (9));
+    const int rsel = (int) p (10);
+    static const float ratios[5] = { 4, 8, 12, 20, 30 }, thrShift[5] = { 0, 1.5f, 3, 4.5f, 2 };
+    const float ratio = ratios[rsel];
+    const bool allButtons = rsel == 4;
+    const float thr = -26.0f + thrShift[rsel];
+    const float aC = std::exp (-1.0f / (0.001f * p (11) * sampleRate));
+    const float relMs = p (12);
+    const float rFast = std::exp (-1.0f / (0.001f * relMs * 0.35f * sampleRate));
+    const float rSlow = std::exp (-1.0f / (0.001f * relMs * 1.6f * sampleRate));
+    const float holdC = std::exp (-1.0f / (0.4f * sampleRate));
+    const float dryAmt = p (13) * 0.01f;
+    const float slope = 1.0f / ratio - 1.0f;
+    float maxGr = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        const float xl = L[i] * inG, xr = R[i] * inG;
+        // feedback: the detector hears the output (previous gain)
+        const float g0 = std::exp (grDb * 0.11512925f);
+        const float det = std::max (std::abs (xl), std::abs (xr)) * g0;
+        const float over = gainToDb (det + 1.0e-9f) - thr;
+        float target = 0;
+        if (over > -3.0f)   // 1176s have a soft knee of a few dB
+        {
+            const float o = over < 3.0f ? (over + 3.0f) * (over + 3.0f) / 12.0f : over;
+            target = slope * o * (allButtons ? 1.4f : 1.0f);
+        }
+        target = std::max (target, -40.0f);
+        // program-dependent release: long compression builds up "slow" and recovers gently
+        sustained = target < -1.0f ? holdC * sustained + (1 - holdC) : holdC * sustained;
+        const float rC = rFast + (rSlow - rFast) * sustained;
+        grDb = target < grDb ? aC * grDb + (1 - aC) * target : rC * grDb + (1 - rC) * target;
+        const float g = std::exp (grDb * 0.11512925f);
+        float yl = xl * g, yr = xr * g;
+        // FET colour: a little even-harmonic warmth that grows with gain reduction (and lots with all buttons in)
+        const float colour = std::min (0.25f, -grDb * (allButtons ? 0.02f : 0.006f));
+        yl = yl + colour * yl * std::abs (yl) * 0.5f;
+        yr = yr + colour * yr * std::abs (yr) * 0.5f;
+        if (allButtons) { yl = fastTanh (yl * 1.3f) / 1.3f; yr = fastTanh (yr * 1.3f) / 1.3f; }
+        L[i] = yl * outG + L[i] * dryAmt;
+        R[i] = yr * outG + R[i] * dryAmt;
         maxGr = std::min (maxGr, grDb);
     }
     reductionDb = maxGr;
@@ -409,7 +471,7 @@ void UtilityBlock::process (float* L, float* R, int n)
 // Delay
 DelayBlock::DelayBlock() : Block (Type::Delay)
 {
-    addChoice ("type", "Type", { "Digital", "Tape", "Analog", "Ping-pong", "Dual", "Reverse", "Multi-tap", "Swell" }, 0);
+    addChoice ("type", "Type", { "Digital", "Tape", "Analog", "Ping-pong", "Dual", "Reverse", "Multi-tap", "Swell", "Crystal" }, 0);
     addFloat ("time", "Time", 20, 2000, 400, "ms", 400, 1);
     addChoice ("sync", "Sync", { "Off", "1/1", "1/2", "1/4 dot", "1/4", "1/4 trip", "1/8 dot", "1/8", "1/8 trip", "1/16" }, 0);
     addFloat ("feedback", "Feedback", 0, 110, 35, "%", -1, 1);
@@ -427,6 +489,9 @@ DelayBlock::DelayBlock() : Block (Type::Delay)
     auto& sw = addFloat ("swell", "Swell time", 50, 3000, 600, "ms", 600, 1);
     addToggle ("killDry", "Kill dry (100% wet)", false);
     addToggle ("trails", "Trails", true);
+    // pitch in the repeats: each echo climbs or falls by the interval (Crystal: reversed, an octave up)
+    addChoice ("pitch", "Repeat pitch", { "Off", "+1 octave", "-1 octave", "+5th", "+4th", "-5th", "Detune" }, 0);
+    addFloat ("pitchMix", "Pitch amount", 0, 100, 100, "%", -1, 1);
 
     auto isType = [] (std::initializer_list<int> ts) { return [ts] (const Block& b) { const int t = (int) b.params[0]->get(); for (int x : ts) if (x == t) return true; return false; }; };
     w.visible = fl.visible = isType ({ Tape });
@@ -449,12 +514,13 @@ void DelayBlock::prepare (double sr, int)
         headBump[c].set (Biquad::Type::Peak, (float) sr, 110.0f, 0.8f, 1.5f);
     }
     swellEnv.set ((float) sr, 2.0f, 80.0f);
+    for (auto& ps : pitchSh) ps.prepare ((float) sr, 0.045f, 0.2f);
     reset();
 }
 
 void DelayBlock::reset()
 {
-    for (int c = 0; c < 2; ++c) { line[c].clear(); fbLow[c].reset(); fbHigh[c].reset(); age[c].reset(); fbState[c] = 0; revPhase[c] = c * 0.5f; }
+    for (int c = 0; c < 2; ++c) { line[c].clear(); fbLow[c].reset(); fbHigh[c].reset(); age[c].reset(); fbState[c] = 0; revPhase[c] = c * 0.5f; pitchSh[c].clear(); crystalRaw[c] = 0; }
     swellGain = 0;
 }
 
@@ -463,7 +529,14 @@ void DelayBlock::process (float* L, float* R, int n)
     const int kind = (int) p (0);
     float ms = syncToMs ((int) p (2), context().bpm.load());
     if (ms < 0) ms = p (1);
-    if (kind == Reverse) ms = std::min (ms, 1400.0f);
+    if (kind == Reverse || kind == Crystal) ms = std::min (ms, 1400.0f);
+    {
+        static const float semis[7] = { 0, 12, -12, 7, 5, -7, 0 };
+        const int pc = (int) p (18);
+        pitchRatio[0] = pitchRatio[1] = std::exp2 (semis[pc] / 12.0f);
+        if (pc == 6) { pitchRatio[0] = std::exp2 (0.12f / 12.0f); pitchRatio[1] = std::exp2 (-0.12f / 12.0f); }
+    }
+    const float pitchMix = p (19) * 0.01f;
     const float baseD = ms * 0.001f * sampleRate;
     const float fb = std::min (p (3) * 0.01f, (kind == Tape || kind == Analog) ? 1.1f : 0.98f);
     const float mix = p (4) * 0.01f;
@@ -502,11 +575,11 @@ void DelayBlock::process (float* L, float* R, int n)
             float d = timeSm[c].next();
             if (kind == Tape)
                 d += wow[c].next() * wowAmt * 0.0035f * sampleRate + flutter.sine (c * 0.1f) * flutAmt * 0.00035f * sampleRate;
-            else if (kind != Reverse)
+            else if (kind != Reverse && kind != Crystal)
                 d += mod.sine (c * 0.25f) * modDepth * 0.0025f * sampleRate;
             d = std::max (2.0f, d);
 
-            if (kind == Reverse)
+            if (kind == Reverse || kind == Crystal)
             {
                 const float W = std::max (64.0f, d);
                 const float ph1 = revPhase[c], ph2 = ph1 + 0.5f - std::floor (ph1 + 0.5f);
@@ -514,6 +587,7 @@ void DelayBlock::process (float* L, float* R, int n)
                 y[c] = line[c].read (2.0f + 2.0f * ph1 * W) * w1 * w1 + line[c].read (2.0f + 2.0f * ph2 * W) * w2 * w2;
                 revPhase[c] += 1.0f / W;
                 if (revPhase[c] >= 1.0f) revPhase[c] -= 1.0f;
+                if (kind == Crystal) { crystalRaw[c] = y[c]; y[c] = pitchSh[c].process (y[c], 2.0f) * 1.1f; }
             }
             else if (kind == MultiTap)
             {
@@ -533,7 +607,7 @@ void DelayBlock::process (float* L, float* R, int n)
 
         for (int c = 0; c < 2; ++c)
         {
-            float f = (kind == MultiTap) ? fbState[c] : y[c];
+            float f = (kind == MultiTap) ? fbState[c] : (kind == Crystal ? crystalRaw[c] : y[c]);
             f = fbHigh[c].process (fbLow[c].process (f));
             if (kind == Tape)
             {
@@ -546,6 +620,8 @@ void DelayBlock::process (float* L, float* R, int n)
                 f = age[c].lp (f);
                 f = fastTanh (f * (1.0f + sat * 2.0f)) / (1.0f + sat * 0.8f);
             }
+            if (pitchRatio[c] != 1.0f && kind != Crystal)
+                f = f * (1.0f - pitchMix) + pitchSh[c].process (f, pitchRatio[c]) * pitchMix;
             fbState[c] = f;
         }
 
@@ -586,7 +662,7 @@ ReverbBlock::ReverbBlock() : Block (Type::Reverb)
     addFloat ("mix", "Mix", 0, 100, 25, "%", -1, 1);
     auto& md = addFloat ("mod", "Modulation", 0, 100, 30, "%", -1, 1);
     auto& df = addFloat ("diffusion", "Diffusion", 0, 100, 70, "%", -1, 1);
-    auto& sp = addChoice ("pitch", "Shimmer pitch", { "+1 octave", "+5th", "+2 octaves", "-1 octave" }, 0);
+    auto& sp = addChoice ("pitch", "Shimmer pitch", { "+1 octave", "+5th", "+2 octaves", "-1 octave", "+4th", "+2nd", "-5th", "Detuned" }, 0);
     auto& sa = addFloat ("shimmer", "Shimmer amount", 0, 100, 50, "%", -1, 1);
     auto& dw = addFloat ("dwell", "Dwell", 0, 100, 50, "%", -1, 1);
     auto& dr = addFloat ("drip", "Drip", 0, 100, 40, "%", -1, 1);
@@ -690,8 +766,8 @@ void ReverbBlock::process (float* L, float* R, int n)
     const bool killDry = p (14) > 0.5f;
     const float modAmt = p (7) * 0.01f * (kind == Ambient ? 2.0f : 1.0f);
     const float diffG = 0.45f + 0.3f * p (8) * 0.01f;
-    static const float ratios[4] = { 2.0f, 1.5f, 4.0f, 0.5f };
-    const float shRatio = ratios[juce::jlimit (0, 3, (int) p (9))];
+    static const float ratios[8] = { 2.0f, 1.5f, 4.0f, 0.5f, 1.33484f, 1.12246f, 0.66742f, 1.00696f };
+    const float shRatio = ratios[juce::jlimit (0, 7, (int) p (9))];
     const float shAmt = p (10) * 0.01f;
     const float dwell = p (11) * 0.01f, dripAmt = p (12) * 0.01f;
     const float bloomCoef = 1.0f / std::max (1.0f, p (13) * 0.001f * sampleRate);
