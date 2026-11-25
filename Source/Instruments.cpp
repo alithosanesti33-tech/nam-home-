@@ -245,7 +245,10 @@ juce::String SaxBlock::getSubtitle() const
     static const int hornFor[4] = { 1, 0, 0, 0 };
     auto& bank = ndsp::SaxSampleBank::get();
     if ((int) params[sSound]->get() == 0 && ! bank.has (hornFor[juce::jlimit (0, 3, (int) params[sModel]->get())]))
-        return bank.isReady() || bank.status() != "loading" ? "Recordings missing: run ~/namupdate.sh" : "Loading recordings...";
+    {
+        bank.retryIfMissing();
+        return bank.isReady() ? "This horn's recordings are missing" : bank.status();
+    }
     return params[sCharacter]->text();
 }
 

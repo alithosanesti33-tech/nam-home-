@@ -46,16 +46,96 @@ public:
         return map[horn][layer][m];
     }
 
-    juce::String status() const { return statusText; }
+    juce::String status() const { const juce::ScopedLock sl (statusLock); return statusText; }
+
+    // if loading failed (no drive, no internet), try again now and then while a sax is in use
+    void retryIfMissing()
+    {
+        if (ready.load() || isThreadRunning()) return;
+        const juce::ScopedLock sl (lock);
+        if (! wanted || root == juce::File()) return;
+        if (juce::Time::getMillisecondCounter() - lastAttempt.load() < 15000u) return;
+        startThread (juce::Thread::Priority::low);
+    }
 
 private:
     SaxSampleBank() : juce::Thread ("Sax recordings") {}
     ~SaxSampleBank() override { stopThread (3000); }
 
+    // Finds the recordings wherever they ended up (library folder, ~/Music/NAM Home, the folder the
+    // installer was told about, a NAM Home folder on any drive). If none are found, downloads them
+    // into the library folder itself, so the recorded sax never depends on the install script.
+    static bool hasRecordings (const juce::File& sax)
+    {
+        auto mf = sax.getChildFile ("alto").getChildFile ("mf");
+        return mf.isDirectory() && mf.getNumberOfChildFiles (juce::File::findFiles, "*.wav") > 4;
+    }
+
+    juce::File findRecordings (const juce::File& libRoot) const
+    {
+        juce::Array<juce::File> c;
+        c.add (libRoot.getChildFile ("Instruments").getChildFile ("Sax"));
+        c.add (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("NAM Home").getChildFile ("Instruments").getChildFile ("Sax"));
+        auto pathFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                            .getChildFile ("Application Support").getChildFile ("NAM Home").getChildFile ("library-path.txt");
+        const auto p = pathFile.loadFileAsString().trim();
+        if (p.startsWithChar ('/')) c.add (juce::File (p).getChildFile ("Instruments").getChildFile ("Sax"));
+        for (const auto& v : juce::File ("/Volumes").findChildFiles (juce::File::findDirectories, false))
+            c.add (v.getChildFile ("NAM Home").getChildFile ("Instruments").getChildFile ("Sax"));
+        for (const auto& f : c) if (hasRecordings (f)) return f;
+        return {};
+    }
+
+    bool download (const juce::File& sax)
+    {
+        setStatus ("Downloading sax recordings...");
+        const juce::URL url ("https://github.com/alithosanesti33-tech/nam-home-/releases/download/sax-recordings/NAM-Home-Sax.zip");
+        auto opts = juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
+                        .withConnectionTimeoutMs (15000).withNumRedirectsToFollow (8);
+        std::unique_ptr<juce::InputStream> in (url.createInputStream (opts));
+        if (in == nullptr) return false;
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("NAM-Home-Sax.zip");
+        tmp.deleteFile();
+        {
+            juce::FileOutputStream out (tmp);
+            if (! out.openedOk()) return false;
+            const auto total = in->getTotalLength();
+            juce::HeapBlock<char> buf (1 << 16);
+            juce::int64 got = 0; int lastPct = -1;
+            for (;;)
+            {
+                if (threadShouldExit()) return false;
+                const int n = in->read (buf.get(), 1 << 16);
+                if (n <= 0) break;
+                out.write (buf.get(), (size_t) n);
+                got += n;
+                const int pct = total > 0 ? (int) (100 * got / total) : -1;
+                if (pct != lastPct && pct >= 0) { lastPct = pct; setStatus ("Downloading sax recordings " + juce::String (pct) + "%"); }
+            }
+            if (got < 1000000) return false;
+        }
+        setStatus ("Unpacking sax recordings...");
+        sax.createDirectory();
+        juce::ZipFile zip (tmp);
+        const bool ok = zip.getNumEntries() > 0 && zip.uncompressTo (sax, true).wasOk();
+        tmp.deleteFile();
+        return ok && hasRecordings (sax);
+    }
+
     void run() override
     {
-        juce::File base;
-        { const juce::ScopedLock sl (lock); base = root.getChildFile ("Instruments").getChildFile ("Sax"); }
+        juce::File libRoot;
+        { const juce::ScopedLock sl (lock); libRoot = root; }
+        lastAttempt = juce::Time::getMillisecondCounter();
+        setStatus ("Loading recordings...");
+        juce::File base = findRecordings (libRoot);
+        if (base == juce::File())
+        {
+            base = libRoot.getChildFile ("Instruments").getChildFile ("Sax");
+            if (! download (base)) { setStatus ("Sax recordings missing (couldn't download them)"); return; }
+        }
+        pool.clear();
+        for (auto& h : slots) for (auto& l : h) for (auto& m : l) m = nullptr;
         juce::AudioFormatManager fm;
         fm.registerBasicFormats();
         static const char* horns[2] = { "alto", "soprano" };
@@ -105,8 +185,9 @@ private:
                     if (best != nullptr && l == 1 && slots[h][l][m]) ++count[h];
                 }
         }
-        statusText = juce::String (count[0]) + " alto and " + juce::String (count[1]) + " soprano recordings";
         ready = count[0] > 0 || count[1] > 0;
+        setStatus (ready.load() ? juce::String (count[0]) + " alto and " + juce::String (count[1]) + " soprano recordings"
+                                : "Couldn't read the sax recordings in " + base.getFullPathName());
     }
 
     // measure pitch, onset, a settled sustain point, and a seamless loop in the steady part
@@ -178,7 +259,10 @@ private:
     const SaxSample* slots[2][3][128] {};
     const SaxSample* map[2][3][128] {};
     int count[2] { 0, 0 };
-    juce::String statusText { "loading" };
+    juce::String statusText { "Loading recordings..." };
+    juce::CriticalSection statusLock;
+    std::atomic<juce::uint32> lastAttempt { 0 };
+    void setStatus (const juce::String& t) { const juce::ScopedLock sl (statusLock); statusText = t; }
 };
 
 // One playing recording (with its own position, loop, fade and pitch)
