@@ -1,6 +1,8 @@
 #pragma once
 #include "Blocks.h"
 #include "phat/PhatCore.h"
+#include "dsp/GuitarTracker.h"
+#include "dsp/SaxVoice.h"
 
 namespace nam { class DSP; }
 
@@ -318,13 +320,35 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
-    phat::PitchTracker tracker;
-    phat::GateTrigger gateTrigger;
+    ndsp::GuitarTracker tracker;   // shared with the Saxophone: no old-note blips on re-picks
     phat::Voice voice;
     double rate = 48000.0;
-    float rawMidi = 60, slowMidi = 60, smoothMidi = 60, glideMidi = 60, lastHz = 0;
-    bool haveRaw = false, pitchReady = false;
-    int samplesSinceResult = 1000000, jumpCooldown = 0;
+    float glideMidi = 60, lastHz = 0;
+    bool everValid = false;
     float validGain = 0, dryGate = 0;
-    float smoothCoefSlow = 0.01f, smoothCoefFast = 0.1f, slowFollowCoef = 0.01f, validCoef = 0.05f, dryAtk = 0.01f, dryRel = 0.001f;
+    float validCoef = 0.05f, dryAtk = 0.01f, dryRel = 0.001f;
+};
+
+// Saxophone: soprano, alto, tenor or baritone, played by your guitar.
+class SaxBlock : public Block
+{
+public:
+    SaxBlock();
+    juce::String getTitle() const override;
+    juce::String getSubtitle() const override;
+    void setModel (int m);   // also sets that horn's usual octave
+    std::atomic<float> detectedHz { 0 };
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::GuitarTracker tracker;
+    ndsp::SaxVoice voice;
+    float rate = 48000.0f;
+    bool sounding = false, pending = false, pendingFromSilence = false, releasing = false;
+    int pendingAge = 0;
+    float fold = 0, glideOff = 0, scoopOff = 0, fallOff = 0, fallTarget = 0;
+    float breath = 0, bite = 0, tongue = 0, noteVel = 0.7f, noteTime = 0, vibPhase = 0, vibFromGuitar = 0, dipEnv = 0;
+    float lastPitch = 60.0f, outPitch = 60.0f;
 };

@@ -14,6 +14,7 @@ void Engine::prepare (double sr, int mb)
     sampleRate = sr;
     maxBlock = juce::jmax (32, mb);
     for (auto& r : buf) for (auto& c : r) c.assign ((size_t) maxBlock, 0.0f);
+    for (auto& c : cleanBuf) c.assign ((size_t) maxBlock, 0.0f);
     loadMeasurer.reset (sr, maxBlock);
     for (auto& row : cells)
         for (auto& b : row)
@@ -389,6 +390,19 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     bool independent[rows];
     for (int r = 0; r < rows; ++r) independent[r] = rowIsIndependent (r);
 
+    // the clean interface inputs, for instrument blocks that track your dry guitar wherever they sit
+    for (int k = 0; k < 2; ++k)
+    {
+        float* d = cleanBuf[k].data();
+        for (int i = 0; i < n; ++i) d[i] = inputSample (k + 1, i);
+    }
+    const float* cleanFor[rows];
+    for (int r = 0; r < rows; ++r)
+    {
+        const int input = independent[r] ? rowInput[r].load() : rowInput[0].load();
+        cleanFor[r] = cleanBuf[juce::jlimit (1, 2, input) - 1].data();
+    }
+
     // main row (and any row with its own input) starts from its interface input
     for (int r = 0; r < rows; ++r)
     {
@@ -408,12 +422,15 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
                 std::copy (mR, mR + n, buf[r][1].begin());
             }
 
-        if (auto* b = plan.cell[0][c]) b->run (mL, mR, n);
+        if (auto* b = plan.cell[0][c]) { b->cleanInput = cleanFor[0]; b->run (mL, mR, n); }
         for (int r = 1; r < rows; ++r)
         {
             if (! plan.active[r] || plan.cell[r][c] == nullptr) continue;
             if (independent[r] || (c >= plan.first[r] && c <= plan.last[r]))
+            {
+                plan.cell[r][c]->cleanInput = cleanFor[r];
                 plan.cell[r][c]->run (buf[r][0].data(), buf[r][1].data(), n);
+            }
         }
 
         bool mainScaled = false;

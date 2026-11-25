@@ -70,7 +70,7 @@ private:
     void stepPreset (int delta);
     void refreshAll();
     void loadFromLibrary (const juce::File& f);
-    void addEffectFromLibrary (Block::Type t);
+    void addEffectFromLibrary (Block::Type t, int variant = -1);
     void openSettings();
     juce::String presetTitle() const;
 

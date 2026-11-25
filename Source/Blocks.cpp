@@ -185,6 +185,7 @@ juce::String Block::typeName (Type t)
         case Type::TriChorus:    return "Tri-Chorus";
         case Type::Utility:      return "Utility";
         case Type::PhatTrack:    return "PhatTrack";
+        case Type::Sax:          return "Saxophone";
         case Type::NumTypes:     break;
     }
     return {};
@@ -200,6 +201,7 @@ juce::String Block::categoryName (Type t)
         case Type::GraphicEQ: case Type::ParametricEQ: return "EQ";
         case Type::Gate: case Type::Utility: return "Utility";
         case Type::PhatTrack: return "Synthesizers";
+        case Type::Sax: return "Saxophone";
         default: return "Effects";
     }
 }
@@ -217,6 +219,7 @@ juce::Colour Block::colour (Type t)
         case Type::Gate: case Type::Utility:
                                  return juce::Colour (0xff8a8f98);
         case Type::PhatTrack:    return juce::Colour (0xffff7a59);
+        case Type::Sax:          return juce::Colour (0xffe8c547);
         default:                 return juce::Colour (0xffe26ba8);
     }
 }
@@ -241,6 +244,7 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::TriChorus:    return std::make_unique<TriChorusBlock>();
         case Type::Utility:      return std::make_unique<UtilityBlock>();
         case Type::PhatTrack:    return std::make_unique<PhatTrackBlock>();
+        case Type::Sax:          return std::make_unique<SaxBlock>();
         case Type::NumTypes:     break;
     }
     return nullptr;

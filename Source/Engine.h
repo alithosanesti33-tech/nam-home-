@@ -139,6 +139,7 @@ private:
     double sampleRate = 48000.0;
     int maxBlock = 512;
     std::vector<float> buf[rows][2];
+    std::vector<float> cleanBuf[2];
     juce::AudioProcessLoadMeasurer loadMeasurer;
 
     ndsp::PitchShifter shifter[2];

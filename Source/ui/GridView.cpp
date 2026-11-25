@@ -386,23 +386,29 @@ void GridView::mouseDoubleClick (const MouseEvent& e)
 void GridView::showAddMenu (Point<int> cell)
 {
     PopupMenu m;
-    StringArray cats { "Amps", "Pedals", "Cabs", "EQ", "Effects", "Synthesizers", "Utility" };
+    StringArray cats { "Amps", "Pedals", "Cabs", "EQ", "Effects", "Synthesizers", "Saxophone", "Utility" };
     std::map<String, PopupMenu> subs;
     for (auto t : Block::allTypes())
     {
         const auto cat = Block::categoryName (t);
+        if (t == Block::Type::Sax)
+        {
+            for (int v = 0; v < 4; ++v) subs[cat].addItem (1000 + v, juce::String (ndsp::saxModel (v).name) + " sax");   // Soprano first
+            continue;
+        }
         subs[cat].addItem ((int) t + 1, Block::typeName (t));
     }
     m.addSectionHeader ("Add a block");
     for (auto& c : cats)
         if (subs.count (c)) m.addSubMenu (c, subs[c]);
     m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (cellBounds (cell.y, cell.x).toNearestInt())),
-                     [this, cell] (int r) { if (r > 0) addBlockAt ((Block::Type) (r - 1), cell); });
+                     [this, cell] (int r) { if (r >= 1000) addBlockAt (Block::Type::Sax, cell, r - 1000); else if (r > 0) addBlockAt ((Block::Type) (r - 1), cell); });
 }
 
-void GridView::addBlockAt (Block::Type t, Point<int> cell)
+void GridView::addBlockAt (Block::Type t, Point<int> cell, int variant)
 {
     auto b = proc.engine.addBlock (t, cell.y, cell.x);
+    if (auto* sax = dynamic_cast<SaxBlock*> (b.get())) sax->setModel (juce::jmax (0, variant));
     if (t == Block::Type::Delay || t == Block::Type::Reverb || t == Block::Type::Modulation || t == Block::Type::TriChorus)
         if (cell.y > 0)
             if (auto* kd = b->param ("killDry")) { kd->set (1.0f); if (auto* mx = b->param ("mix")) mx->set (100.0f); }   // parallel rows: wet only
@@ -475,7 +481,10 @@ void GridView::itemDropped (const SourceDetails& d)
         if (onSelect) onSelect (cell);
     }
     else if (desc.startsWith ("type:"))
-        addBlockAt ((Block::Type) desc.fromFirstOccurrenceOf ("type:", false, false).getIntValue(), cell);
+    {
+        const auto parts = StringArray::fromTokens (desc.fromFirstOccurrenceOf ("type:", false, false), ":", {});
+        addBlockAt ((Block::Type) parts[0].getIntValue(), cell, parts.size() > 1 ? parts[1].getIntValue() : -1);
+    }
     else if (desc.startsWith ("file:"))
     {
         const auto err = proc.loadFileIntoBlock (File (desc.fromFirstOccurrenceOf ("file:", false, false)), cell.y, cell.x);

@@ -3,7 +3,7 @@
 
 using namespace juce;
 
-static const char* chipNames[] = { "All", "Adjustable amps", "NAM captures", "Pedals", "Cabs / IRs", "Effects", "Synthesizers" };
+static const char* chipNames[] = { "All", "Adjustable amps", "NAM captures", "Pedals", "Cabs / IRs", "Effects", "Synthesizers", "Saxophone" };
 
 //==============================================================================
 LibraryPanel::LibraryPanel (NAMHomeProcessor& p) : proc (p)
@@ -14,7 +14,7 @@ LibraryPanel::LibraryPanel (NAMHomeProcessor& p) : proc (p)
     search.onTextChange = [this] { refresh(); };
     addAndMakeVisible (search);
 
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < 8; ++i)
     {
         auto* b = chips.add (new TextButton (chipNames[i]));
         b->setClickingTogglesState (true);
@@ -87,7 +87,19 @@ void LibraryPanel::refresh()
     };
     if (filter == 3) addBuiltIns ("Built-in pedals", [] (Block::Type t) { return Block::categoryName (t) == "Pedals"; });
     if (all || filter == 6) addBuiltIns ("Synthesizers", [] (Block::Type t) { return Block::categoryName (t) == "Synthesizers"; });
-    if (all || filter == 5) addBuiltIns ("Built-in effects", [] (Block::Type t) { return Block::categoryName (t) != "Synthesizers"; });
+    if (all || filter == 7)
+    {
+        // each horn is its own entry; Soprano first
+        std::vector<Entry> sx;
+        for (int v = 0; v < 4; ++v)
+        {
+            const juce::String name = juce::String (ndsp::saxModel (v).name) + " sax";
+            if (! matches (name + " saxophone")) continue;
+            Entry e; e.type = Block::Type::Sax; e.variant = v; e.label = name; sx.push_back (e);
+        }
+        if (! sx.empty()) { addSection ("Saxophone"); shown.insert (shown.end(), sx.begin(), sx.end()); }
+    }
+    if (all || filter == 5) addBuiltIns ("Built-in effects", [] (Block::Type t) { return Block::categoryName (t) != "Synthesizers" && Block::categoryName (t) != "Saxophone"; });
     list.updateContent();
     list.repaint();
     repaint();
@@ -186,6 +198,7 @@ void LibraryPanel::paintListBoxItem (int row, Graphics& g, int w, int h, bool se
         g.setColour (theme::muted);
         g.setFont (theme::font (12.0f));
         const auto sub = Block::categoryName (e.type) == "Synthesizers" ? String ("Guitar-to-synth, played by your guitar")
+                       : Block::categoryName (e.type) == "Saxophone" ? String ("Played by your guitar, every control MIDI-ready")
                                                                         : "Built-in " + Block::categoryName (e.type).toLowerCase().trimCharactersAtEnd ("s") + ", every control adjustable";
         g.drawText (sub, 34, 24, w - 60, 17, Justification::centredLeft);
     }
@@ -196,7 +209,7 @@ void LibraryPanel::listBoxItemDoubleClicked (int row, const MouseEvent&)
     if (row < 0 || row >= (int) shown.size() || shown[(size_t) row].header) return;
     const auto& e = shown[(size_t) row];
     if (e.item != nullptr) { if (onLoadFile) onLoadFile (e.item->file); }
-    else if (onAddEffect) onAddEffect (e.type);
+    else if (onAddEffect) onAddEffect (e.type, e.variant);
 }
 
 var LibraryPanel::getDragSourceDescription (const SparseSet<int>& rows)
@@ -205,7 +218,8 @@ var LibraryPanel::getDragSourceDescription (const SparseSet<int>& rows)
     const int r = rows[0];
     if (r < 0 || r >= (int) shown.size() || shown[(size_t) r].header) return {};
     const auto& e = shown[(size_t) r];
-    return e.item != nullptr ? var ("file:" + e.item->file.getFullPathName()) : var ("type:" + String ((int) e.type));
+    if (e.item != nullptr) return var ("file:" + e.item->file.getFullPathName());
+    return var ("type:" + String ((int) e.type) + (e.variant >= 0 ? ":" + String (e.variant) : String()));
 }
 
 //==============================================================================

@@ -40,7 +40,7 @@ public:
     enum class Type
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
-        GraphicEQ, ParametricEQ, Delay, Reverb, Modulation, TriChorus, Utility, PhatTrack, NumTypes
+        GraphicEQ, ParametricEQ, Delay, Reverb, Modulation, TriChorus, Utility, PhatTrack, Sax, NumTypes
     };
 
     explicit Block (Type t);
@@ -60,6 +60,7 @@ public:
 
     int id = 0;
     std::atomic<bool> enabled { true };
+    const float* cleanInput = nullptr;    // the dry interface input for this row (set by the engine each block)
     std::vector<std::unique_ptr<Param>> params;
     Param* param (const juce::String& pid) const;
 

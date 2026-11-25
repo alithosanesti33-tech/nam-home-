@@ -42,7 +42,7 @@ public:
 
     void showAddMenu (juce::Point<int> cell);
     void showContextMenu (juce::Point<int> cell);
-    void addBlockAt (Block::Type t, juce::Point<int> cell);
+    void addBlockAt (Block::Type t, juce::Point<int> cell, int variant = -1);
     void removeAt (juce::Point<int> cell);
     juce::Rectangle<float> cellBounds (int r, int c) const;
     juce::Rectangle<float> inputChip (int r) const;

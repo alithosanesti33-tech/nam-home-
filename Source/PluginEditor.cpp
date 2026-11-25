@@ -159,7 +159,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     settingsBtn.onClick = [this] { openSettings(); };
 
     library.onLoadFile = [this] (const File& f) { loadFromLibrary (f); };
-    library.onAddEffect = [this] (Block::Type t) { addEffectFromLibrary (t); };
+    library.onAddEffect = [this] (Block::Type t, int v) { addEffectFromLibrary (t, v); };
     library.onMessage = [this] (const String& s, bool w) { message (s, w); };
 
     grid.onSelect = [this] (Point<int> c) { selectCell (c); };
@@ -452,14 +452,14 @@ void NAMHomeEditor::loadFromLibrary (const File& f)
     refreshAll();
 }
 
-void NAMHomeEditor::addEffectFromLibrary (Block::Type t)
+void NAMHomeEditor::addEffectFromLibrary (Block::Type t, int variant)
 {
     Point<int> target { -1, -1 };
     if (proc.engine.get (grid.selected.y, grid.selected.x) == nullptr) target = grid.selected;
     for (int c = 0; c < Engine::cols && target.x < 0; ++c)
         if (proc.engine.get (0, c) == nullptr) target = { c, 0 };
     if (target.x < 0) { message ("No free slot in the main row.", true); return; }
-    grid.addBlockAt (t, target);
+    grid.addBlockAt (t, target, variant);
 }
 
 //==============================================================================

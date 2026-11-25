@@ -52,6 +52,8 @@ PhatTrackBlock::PhatTrackBlock() : Block (Type::PhatTrack)
     addChoice ("modsrc", "Source", { "Tri", "Square", "Saw", "Ramp", "Filt env", "Osc 2", "S&H", "Noise" }, 0);
     addChoice ("moddst", "Destination", { "Pitch", "Osc 2", "Filter", "Wave" }, 0);
     addFloat ("modamt", "Amount", 0, 100, 6, "%", -1, 1);
+    currentGroup = "Input";
+    addToggle ("clean", "Track clean input", true);   // index 39: listens to your dry guitar wherever it sits
     currentGroup = {};
 }
 
@@ -59,30 +61,25 @@ void PhatTrackBlock::prepare (double sr, int)
 {
     rate = sr;
     tracker.prepare (sr);
-    gateTrigger.prepare (sr);
     voice.prepare (sr);
-    smoothCoefSlow = phat::coefFromSeconds (0.003f, sr);
-    smoothCoefFast = phat::coefFromSeconds (0.0005f, sr);
-    slowFollowCoef = phat::coefFromSeconds (0.005f, sr);
-    validCoef      = phat::coefFromSeconds (0.001f, sr);
-    dryAtk         = phat::coefFromSeconds (0.002f, sr);
-    dryRel         = phat::coefFromSeconds (0.040f, sr);
+    validCoef = phat::coefFromSeconds (0.001f, sr);
+    dryAtk    = phat::coefFromSeconds (0.002f, sr);
+    dryRel    = phat::coefFromSeconds (0.040f, sr);
     reset();
 }
 
 void PhatTrackBlock::reset()
 {
-    tracker.reset(); gateTrigger.reset(); voice.reset();
-    rawMidi = slowMidi = smoothMidi = glideMidi = 60.0f;
-    lastHz = 0; haveRaw = pitchReady = false;
-    samplesSinceResult = 1000000; jumpCooldown = 0;
+    tracker.reset(); voice.reset();
+    glideMidi = 60.0f; lastHz = 0;
+    everValid = false;
     validGain = dryGate = 0;
 }
 
 void PhatTrackBlock::process (float* L, float* R, int n)
 {
     // parameters by position (same order as added above); no lookups by name on the audio thread
-    gateTrigger.setThresholdDb (p (0));
+    tracker.setThresholdDb (p (0));
 
     phat::VoiceParams vp;
     static const float wavePos[4] = { 0.0f, 0.34f, 0.67f, 1.0f };
@@ -112,58 +109,32 @@ void PhatTrackBlock::process (float* L, float* R, int n)
     const float dryLevel = p (2) * 0.01f;
     const bool glideOn = p (7) > 0.5f;
     const float glideTime = p (6);
+    const bool clean = p (39) > 0.5f && cleanInput != nullptr;
     const float glideCoef = (glideOn && glideTime > 0.001f) ? phat::coefFromSeconds (glideTime * 0.35f, rate) : 1.0f;
-    const int resultFreshSamples = (int) (0.03 * rate);
-    const int jumpCooldownSamples = (int) (0.04 * rate);
-    phat::PitchTracker::Result result;
     bool gateIsOpen = false;
 
     for (int i = 0; i < n; ++i)
     {
         const float inL = L[i], inR = R[i];
-        const float detect = 0.5f * (inL + inR) * sensGain;
-        const auto g = gateTrigger.process (detect);
-        gateIsOpen = g.open;
-        if (samplesSinceResult < 1000000) ++samplesSinceResult;
+        const float detect = (clean ? cleanInput[i] : 0.5f * (inL + inR)) * sensGain;
+        const auto f = tracker.process (detect);
+        gateIsOpen = f.open;
 
-        if (tracker.push (detect, g.trackerActive, result))
-        {
-            rawMidi = phat::hzToMidi (result.hz);
-            lastHz = result.hz;
-            haveRaw = true;
-            samplesSinceResult = 0;
-            if (! g.open || ! pitchReady) smoothMidi = glideMidi = slowMidi = rawMidi;
-            if (g.open) pitchReady = true;
-        }
-        if (g.opened)
-        {
-            pitchReady = haveRaw && samplesSinceResult < resultFreshSamples;
-            jumpCooldown = jumpCooldownSamples;
-            voice.noteOn();
-        }
-        else if (g.onset && retrig) voice.noteOn();
-        if (g.closed) voice.noteOff();
+        if (f.attack) { everValid = false; voice.noteOn(); }
+        else if (f.repick && retrig) voice.noteOn();
+        if (f.noteChange && retrig) voice.noteOn();
+        if (f.released) voice.noteOff();
 
-        slowMidi += slowFollowCoef * (rawMidi - slowMidi);
-        if (jumpCooldown > 0) --jumpCooldown;
-        else if (g.open && pitchReady && std::fabs (rawMidi - slowMidi) > 0.6f)
+        if (f.valid)
         {
-            slowMidi = rawMidi;
-            jumpCooldown = jumpCooldownSamples;
-            if (retrig) voice.noteOn();
+            if (! everValid) glideMidi = f.midi;   // first pitch after silence: no glide from the last note
+            everValid = true;
         }
+        if (everValid) glideMidi += glideCoef * (f.midi - glideMidi);
+        if (f.valid) lastHz = tracker.hz();
 
-        const float err = rawMidi - smoothMidi, aerr = std::fabs (err);
-        if (aerr > 1.5f) smoothMidi = rawMidi;
-        else
-        {
-            const float t = phat::clampf ((aerr - 0.03f) / 0.30f, 0.0f, 1.0f);
-            smoothMidi += (smoothCoefSlow + (smoothCoefFast - smoothCoefSlow) * t) * err;
-        }
-        glideMidi += glideCoef * (smoothMidi - glideMidi);
-
-        validGain += validCoef * (((pitchReady && haveRaw) ? 1.0f : 0.0f) - validGain);
-        dryGate += (g.open ? dryAtk : dryRel) * ((g.open ? 1.0f : 0.0f) - dryGate);
+        validGain += validCoef * ((everValid ? 1.0f : 0.0f) - validGain);
+        dryGate += (f.open ? dryAtk : dryRel) * ((f.open ? 1.0f : 0.0f) - dryGate);
 
         const float synth = voice.tick (glideMidi) * validGain;
         const float dryAmt = dryLevel * dryGate;
@@ -171,5 +142,241 @@ void PhatTrackBlock::process (float* L, float* R, int n)
         R[i] = synth + inR * dryAmt;
     }
     gateOpen = gateIsOpen ? 1.0f : 0.0f;
-    detectedHz = (gateIsOpen && pitchReady) ? lastHz : 0.0f;
+    detectedHz = (gateIsOpen && everValid) ? lastHz : 0.0f;
+}
+
+//==============================================================================
+// Saxophone
+namespace
+{
+    enum SaxP
+    {
+        sModel, sCharacter, sOctave, sAutoRange, sVolume, sDry, sClean,
+        sGate, sSens, sDynamics, sSustain, sAttack, sLegato, sTongue,
+        sBright, sBreath, sGrowl, sSubtone, sBody, sClicks,
+        sScoop, sFall, sPitchMode, sGuitarVib,
+        sVibMode, sVibAmount, sVibDepth, sVibRate, sVibDelay
+    };
+    const int saxDefaultOctave[4] = { 2, 2, 1, 1 };   // index into { -2, -1, 0, +1, +2 }
+}
+
+SaxBlock::SaxBlock() : Block (Type::Sax)
+{
+    currentGroup = "Saxophone";
+    addChoice ("model", "Saxophone", { "Soprano", "Alto", "Tenor", "Baritone" }, 0);
+    addChoice ("character", "Character", { "80s pop", "Smooth", "R&B honk", "Breathy ballad", "Dark vintage" }, 0);
+    addChoice ("octave", "Octave", { "-2", "-1", "0", "+1", "+2" }, 2);
+    addToggle ("autoRange", "Keep in range", true);
+    addFloat ("volume", "Volume", 0, 150, 80, "%", -1, 1);
+    addFloat ("dry", "Dry guitar", 0, 100, 0, "%", -1, 1);
+    addToggle ("clean", "Track clean input", true);
+    currentGroup = "Playing";
+    addFloat ("gate", "Noise gate", -80, -20, -52, "dB", -1, 0.1f);
+    addFloat ("sens", "Sensitivity", -12, 24, 0, "dB", -1, 0.1f);
+    addFloat ("dynamics", "Pick dynamics", 0, 100, 85, "%", -1, 1);
+    addFloat ("sustain", "Sustain", 0, 100, 65, "%", -1, 1);
+    addFloat ("attack", "Attack bite", 0, 100, 60, "%", -1, 1);
+    addFloat ("legato", "Legato glide", 0, 200, 35, "ms", -1, 1);
+    addToggle ("tongue", "Tongue re-picks", true);
+    currentGroup = "Tone";
+    addFloat ("bright", "Brightness", 0, 100, 65, "%", -1, 1);
+    addFloat ("breath", "Breath", 0, 100, 30, "%", -1, 1);
+    addFloat ("growl", "Growl", 0, 100, 0, "%", -1, 1);
+    addFloat ("subtone", "Subtone", 0, 100, 0, "%", -1, 1);
+    addFloat ("body", "Body", 0, 100, 50, "%", -1, 1);
+    addFloat ("clicks", "Key clicks", 0, 100, 30, "%", -1, 1);
+    currentGroup = "Expression";
+    addFloat ("scoop", "Scoop", 0, 100, 25, "%", -1, 1);
+    addFloat ("fall", "Fall-off", 0, 100, 0, "%", -1, 1);
+    addChoice ("pitchMode", "Pitch", { "Follow guitar", "Snap to notes" }, 0);
+    addFloat ("guitarVib", "Your vibrato", 0, 100, 100, "%", -1, 1);
+    currentGroup = "Vibrato";
+    addChoice ("vibMode", "Sax vibrato", { "Off", "Delayed", "Always", "Pedal / MIDI", "From your vibrato" }, 3);
+    addFloat ("vibAmount", "Pedal amount", 0, 100, 0, "%", -1, 1);
+    addFloat ("vibDepth", "Depth", 0, 60, 25, "cents", -1, 0.1f);
+    addFloat ("vibRate", "Rate", 3, 8, 5.3f, "Hz", -1, 0.01f);
+    addFloat ("vibDelay", "Delay", 0, 1500, 350, "ms", -1, 1);
+    currentGroup = {};
+}
+
+juce::String SaxBlock::getTitle() const { return params[sModel]->text() + " sax"; }
+juce::String SaxBlock::getSubtitle() const { return params[sCharacter]->text(); }
+
+void SaxBlock::setModel (int m)
+{
+    m = juce::jlimit (0, 3, m);
+    params[sModel]->set ((float) m);
+    params[sOctave]->set ((float) saxDefaultOctave[m]);
+}
+
+void SaxBlock::prepare (double sr, int)
+{
+    rate = (float) sr;
+    tracker.prepare (sr);
+    voice.prepare (rate);
+    reset();
+}
+
+void SaxBlock::reset()
+{
+    tracker.reset(); voice.reset();
+    sounding = pending = pendingFromSilence = releasing = false;
+    pendingAge = 0;
+    fold = glideOff = scoopOff = fallOff = fallTarget = 0;
+    breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
+    noteVel = 0.7f; lastPitch = outPitch = 60.0f;
+}
+
+void SaxBlock::process (float* L, float* R, int n)
+{
+    auto p = [this] (int i) { return params[(size_t) i]->get(); };
+    const int model = (int) p (sModel);
+    const auto& horn = ndsp::saxModel (model);
+
+    ndsp::SaxVoice::Settings vs;
+    vs.model = model;
+    vs.character = (int) p (sCharacter);
+    vs.brightness = p (sBright) * 0.01f;
+    vs.breathNoise = p (sBreath) * 0.01f;
+    vs.growl = p (sGrowl) * 0.01f;
+    vs.subtone = p (sSubtone) * 0.01f;
+    vs.body = p (sBody) * 0.01f;
+    vs.keyClicks = p (sClicks) * 0.01f;
+    voice.settings (vs);
+    tracker.setThresholdDb (p (sGate));
+
+    const float sens = ndsp::dbToGain (p (sSens));
+    const float octave = 12.0f * (float) ((int) p (sOctave) - 2);
+    const bool autoRange = p (sAutoRange) > 0.5f;
+    const float volume = p (sVolume) * 0.01f * 0.6f;   // 80% sits level with PhatTrack and a -18 dB NAM rig
+    const float dry = p (sDry) * 0.01f;
+    const bool clean = p (sClean) > 0.5f && cleanInput != nullptr;
+    const float dyn = p (sDynamics) * 0.01f, sus = p (sSustain) * 0.01f, atk = p (sAttack) * 0.01f;
+    const float legatoMs = p (sLegato);
+    const bool tongueOn = p (sTongue) > 0.5f;
+    const float scoopSemis = p (sScoop) * 0.01f * 1.5f;
+    const float fallSemis = p (sFall) * 0.01f * 7.0f;
+    const bool snap = (int) p (sPitchMode) == 1;
+    const float follow = p (sGuitarVib) * 0.01f;
+    const int vibMode = (int) p (sVibMode);
+    const float vibDepth = p (sVibDepth) * 0.01f, vibRate = p (sVibRate), vibDelay = p (sVibDelay) * 0.001f;
+    const float vibAmount = p (sVibAmount) * 0.01f;
+
+    const float dtS = 1.0f / rate;
+    auto coef = [this] (float seconds) { return 1.0f - std::exp (-1.0f / (std::max (seconds, 0.0002f) * rate)); };
+    const float glideC = coef (std::max (0.003f, legatoMs * 0.001f / 3.0f));
+    const float scoopC = coef (0.045f - 0.02f * atk);
+    const float atkC = coef (0.022f - 0.017f * atk), relC = coef (fallSemis > 0.01f ? 0.16f : 0.045f), holdC = coef (0.03f);
+    const float biteC = coef (0.03f), tongueC = coef (0.006f), dipC = coef (0.02f);
+    const float vibGC = coef (0.12f), fallC = coef (0.09f);
+    const int maxPending = (int) (0.035f * rate);
+
+    auto foldFor = [&] (float m)
+    {
+        float f = 0;
+        if (autoRange)
+        {
+            while (m + f < horn.lowMidi && f < 36) f += 12;
+            while (m + f > horn.highMidi && f > -36) f -= 12;
+        }
+        return f;
+    };
+
+    float lastHz = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        const float inL = L[i], inR = R[i];
+        const float detect = (clean ? cleanInput[i] : 0.5f * (inL + inR)) * sens;
+        const auto f = tracker.process (detect);
+
+        // where the guitar is: note centre plus as much of your own vibrato/bends as you want
+        const float centre = snap ? std::round (f.centre) : f.centre;
+        const float played = centre + follow * (f.midi - f.centre) + octave;
+
+        if (f.attack || (f.repick && sounding))
+        {
+            pending = true; pendingAge = 0; pendingFromSilence = f.attack || ! sounding;
+            if (! pendingFromSilence && tongueOn) tongue = 1.0f;   // tongue stops the reed while we confirm the new note
+            voice.keyClick (0.35f + 0.4f * atk);                    // the breath "chiff" starts right away
+        }
+        if (pending)
+        {
+            ++pendingAge;
+            if (f.valid)
+            {
+                // the note speaks: set pitch, dynamics, scoop
+                pending = false;
+                const bool fresh = pendingFromSilence || ! sounding;
+                noteVel = juce::jmax (f.velocity, f.level);
+                if (fresh || std::abs (played + fold - lastPitch) > 0.5f) fold = foldFor (played);
+                const float target = played + fold;
+                if (fresh) { scoopOff = -scoopSemis * (0.6f + 0.4f * noteVel); glideOff = 0; breath = 0.0f; }
+                else if (std::abs (target - lastPitch) > 0.5f) { glideOff = 0; scoopOff = -scoopSemis * 0.4f; voice.keyClick (0.6f); }
+                bite = atk * (0.15f + 0.25f * noteVel);
+                sounding = true; releasing = false; fallOff = 0; fallTarget = 0;
+                noteTime = 0;
+            }
+            else if (pendingAge > maxPending) { pending = false; tongue = 0; }   // never found a pitch: let the old note carry on
+        }
+        if (f.noteChange && sounding && ! pending)
+        {
+            // legato: glide from where the horn is, with a fingering click and a tiny breath dip
+            const float newFold = foldFor (played);
+            const float target = played + newFold;
+            glideOff = lastPitch - target;
+            fold = newFold;
+            voice.keyClick (0.8f);
+            dipEnv = 0.18f;
+            noteTime = 0;
+        }
+        if (f.released && sounding)
+        {
+            releasing = true; sounding = false; pending = false;
+            fallTarget = -fallSemis;
+        }
+
+        // breath from your picking: "Pick dynamics" sets how much it matters, "Sustain" holds the
+        // attack level instead of following the string's decay
+        float x = sus * noteVel + (1.0f - sus) * f.level;
+        x = std::max (x, f.level);
+        x = dyn * x + (1.0f - dyn) * 0.72f;
+        float target = (sounding && ! pending) ? 0.15f + 0.85f * std::pow (juce::jlimit (0.0f, 1.0f, x), 0.8f) : 0.0f;
+        if (pending && ! pendingFromSilence && sounding) target = breath;   // hold while the tongue is on the reed
+        breath += (target > breath ? (noteTime < 0.06f ? atkC : holdC) : (releasing ? relC : holdC)) * (target - breath);
+        bite += biteC * (0.0f - bite);
+        if (! pending) tongue += tongueC * (0.0f - tongue);
+        dipEnv += dipC * (0.0f - dipEnv);
+        const float blow = juce::jmax (0.0f, (breath + bite) * (1.0f - 0.85f * tongue) * (1.0f - dipEnv));
+
+        // pitch: guitar + horn fold + legato glide + scoop + fall
+        glideOff += glideC * (0.0f - glideOff);
+        scoopOff += scoopC * (0.0f - scoopOff);
+        fallOff += fallC * (fallTarget - fallOff);
+        float pitch = (sounding || releasing) ? played + fold + glideOff + scoopOff + fallOff : outPitch;
+
+        // the sax's own vibrato
+        noteTime += dtS;
+        float vd = 0.0f;
+        switch (vibMode)
+        {
+            case 1:  vd = vibDepth * juce::jlimit (0.0f, 1.0f, (noteTime - vibDelay) / 0.25f); break;
+            case 2:  vd = vibDepth * juce::jlimit (0.0f, 1.0f, noteTime / 0.08f); break;
+            case 3:  vd = vibDepth * vibAmount; break;
+            case 4:  vibFromGuitar += vibGC * (f.vibrato - vibFromGuitar); vd = vibDepth * juce::jlimit (0.0f, 1.0f, vibFromGuitar * 1.6f); break;
+            default: break;
+        }
+        vibPhase += vibRate * dtS;
+        if (vibPhase >= 1.0f) vibPhase -= 1.0f;
+        const float vs1 = std::sin (6.2831853f * vibPhase);
+        pitch += vd * vs1;                               // depth is in semitones (cents / 100)
+        const float ampVib = 1.0f + 0.25f * vd * vs1;    // a little jaw pressure with it
+
+        outPitch = pitch;
+        if (sounding && ! pending) lastPitch = played + fold;
+        const float y = (blow > 0.0005f || sounding) ? voice.tick (pitch, blow * ampVib) * volume : voice.tick (pitch, 0.0f) * volume;
+        L[i] = y + inL * dry;
+        R[i] = y + inR * dry;
+        if (f.valid) lastHz = tracker.hz();
+    }
+    detectedHz = sounding ? lastHz : 0.0f;
 }
