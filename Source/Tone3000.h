@@ -35,6 +35,11 @@ private:
     bool refresh();
     juce::var getJson (const juce::String& path);
     bool download (const juce::String& url, const juce::File& dest);
+    static juce::File stateFile();
+    juce::var loadState() const;
+    void saveState (const juce::var& v) const;
+    juce::String getRefresh() const;
+    void setRefresh (const juce::String& token);
 
     Library& library;
     juce::PropertiesFile& settings;

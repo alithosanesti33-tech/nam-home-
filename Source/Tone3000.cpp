@@ -28,7 +28,46 @@ namespace
     }
 }
 
-Tone3000::Tone3000 (Library& lib, juce::PropertiesFile& s) : juce::Thread ("TONE3000"), library (lib), settings (s) {}
+Tone3000::Tone3000 (Library& lib, juce::PropertiesFile& s) : juce::Thread ("TONE3000"), library (lib), settings (s)
+{
+    // move an older sign-in out of the shared settings file
+    if (settings.getValue ("t3kRefresh").isNotEmpty() && getRefresh().isEmpty())
+    {
+        setRefresh (settings.getValue ("t3kRefresh"));
+        settings.removeValue ("t3kRefresh");
+        settings.saveIfNeeded();
+    }
+}
+
+// TONE3000 state lives in its own small file, written only by the app: sign-in token, the
+// requests waiting for TONE3000 to answer (so an answer still works after a restart or if
+// macOS starts a fresh copy of the app), and recently answered ones (so a duplicate is quiet).
+juce::File Tone3000::stateFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+        .getChildFile ("Application Support").getChildFile ("NAM Home").getChildFile ("tone3000.json");
+}
+
+juce::var Tone3000::loadState() const
+{
+    auto v = juce::JSON::parse (stateFile());
+    return v.isObject() ? v : juce::var (new juce::DynamicObject());
+}
+
+void Tone3000::saveState (const juce::var& v) const
+{
+    stateFile().getParentDirectory().createDirectory();
+    stateFile().replaceWithText (juce::JSON::toString (v));
+}
+
+juce::String Tone3000::getRefresh() const { return loadState().getProperty ("refresh", "").toString(); }
+
+void Tone3000::setRefresh (const juce::String& t)
+{
+    auto v = loadState();
+    v.getDynamicObject()->setProperty ("refresh", t);
+    saveState (v);
+}
 
 Tone3000::~Tone3000()
 {
@@ -38,12 +77,11 @@ Tone3000::~Tone3000()
 
 juce::String Tone3000::getClientId() const { return settings.getValue ("t3kClientId"); }
 void Tone3000::setClientId (const juce::String& id) { settings.setValue ("t3kClientId", id.trim()); settings.saveIfNeeded(); }
-bool Tone3000::isSignedIn() const { return settings.getValue ("t3kRefresh").isNotEmpty(); }
+bool Tone3000::isSignedIn() const { return getRefresh().isNotEmpty(); }
 
 void Tone3000::signOut()
 {
-    settings.removeValue ("t3kRefresh");
-    settings.saveIfNeeded();
+    setRefresh ({});
     const juce::ScopedLock sl (jobLock);
     accessToken = {};
 }
@@ -69,6 +107,23 @@ juce::String Tone3000::browse (const juce::String& format)
          .withParameter ("prompt", "select_tone")
          .withParameter ("menubar", "true");
     if (format.isNotEmpty()) u = u.withParameter ("format", format);
+
+    {
+        auto st = loadState();
+        juce::Array<juce::var> keep;
+        const auto now = juce::Time::currentTimeMillis();
+        if (auto* arr = st.getProperty ("pending", {}).getArray())
+            for (auto& e : *arr)
+                if (now - (juce::int64) e.getProperty ("t", 0) < 3 * 3600 * 1000) keep.add (e);
+        while (keep.size() > 9) keep.remove (0);
+        auto* e = new juce::DynamicObject();
+        e->setProperty ("state", state);
+        e->setProperty ("verifier", verifier);
+        e->setProperty ("t", (double) now);
+        keep.add (juce::var (e));
+        st.getDynamicObject()->setProperty ("pending", keep);
+        saveState (st);
+    }
     if (! u.launchInDefaultBrowser()) return "Couldn't open your web browser.";
     return {};
 }
@@ -79,8 +134,34 @@ void Tone3000::handleCallback (const juce::String& rawUrl)
     if (! url.startsWithIgnoreCase ("namhome://")) return;
 
     if (queryValue (url, "error").isNotEmpty()) { post ("TONE3000 sign-in failed: " + queryValue (url, "error"), true); return; }
-    if (queryValue (url, "state") != state || state.isEmpty()) { post ("Ignored a TONE3000 reply that didn't match this request.", true); return; }
-    state = {};
+    {
+        // match the answer to one of our recent requests (it may come to a freshly started app)
+        const auto got = queryValue (url, "state");
+        auto st = loadState();
+        juce::Array<juce::var> keep, used;
+        if (auto* u = st.getProperty ("used", {}).getArray()) used = *u;
+        juce::String found;
+        if (auto* arr = st.getProperty ("pending", {}).getArray())
+            for (auto& e : *arr)
+            {
+                if (got.isNotEmpty() && e.getProperty ("state", "").toString() == got) found = e.getProperty ("verifier", "").toString();
+                else keep.add (e);
+            }
+        if (found.isEmpty())
+        {
+            if (! used.contains (juce::var (got)))   // a second copy of an answer we already used: say nothing
+                post ("That TONE3000 page belongs to an older request. Click Browse TONE3000 again and pick the tone.", true);
+            return;
+        }
+        used.add (got);
+        while (used.size() > 20) used.remove (0);
+        st.getDynamicObject()->setProperty ("pending", keep);
+        st.getDynamicObject()->setProperty ("used", used);
+        saveState (st);
+        const juce::ScopedLock sl (jobLock);
+        verifier = found;
+        state = {};
+    }
 
     const auto code = queryValue (url, "code");
     const auto tone = queryValue (url, "tone_id");
@@ -141,13 +222,13 @@ bool Tone3000::exchangeCode (const juce::String& code)
     const juce::ScopedLock sl (jobLock);
     accessToken = v["access_token"].toString();
     accessExpiry = juce::Time::currentTimeMillis() + (juce::int64) ((double) v.getProperty ("expires_in", 3000) * 900.0);
-    if (v.hasProperty ("refresh_token")) settings.setValue ("t3kRefresh", v["refresh_token"].toString());
+    if (v.hasProperty ("refresh_token")) setRefresh (v["refresh_token"].toString());
     return true;
 }
 
 bool Tone3000::refresh()
 {
-    const auto rt = settings.getValue ("t3kRefresh");
+    const auto rt = getRefresh();
     if (rt.isEmpty()) return false;
     juce::URL u (api + "/oauth/token");
     u = u.withParameter ("grant_type", "refresh_token").withParameter ("refresh_token", rt).withParameter ("client_id", getClientId());
@@ -157,11 +238,11 @@ bool Tone3000::refresh()
                                        .withConnectionTimeoutMs (15000).withStatusCode (&status));
     if (in == nullptr) return false;
     const auto v = juce::JSON::parse (in->readEntireStreamAsString());
-    if (status >= 300 || ! v.hasProperty ("access_token")) { settings.removeValue ("t3kRefresh"); return false; }
+    if (status >= 300 || ! v.hasProperty ("access_token")) { setRefresh ({}); return false; }
     const juce::ScopedLock sl (jobLock);
     accessToken = v["access_token"].toString();
     accessExpiry = juce::Time::currentTimeMillis() + (juce::int64) ((double) v.getProperty ("expires_in", 3000) * 900.0);
-    if (v.hasProperty ("refresh_token")) settings.setValue ("t3kRefresh", v["refresh_token"].toString());
+    if (v.hasProperty ("refresh_token")) setRefresh (v["refresh_token"].toString());
     return true;
 }
 
