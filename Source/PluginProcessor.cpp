@@ -56,6 +56,7 @@ NAMHomeProcessor::NAMHomeProcessor()
     o.folderName = "NAM Home";
     appSettings = std::make_unique<juce::PropertiesFile> (o);
     tone3000 = std::make_unique<Tone3000> (library, *appSettings);
+    library.setPluginMode (isPlugin());
 
     buildDefaultRig();
     startTimerHz (15);
@@ -98,6 +99,11 @@ void NAMHomeProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void NAMHomeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    // inside Logic, delays and tempo-synced effects follow the song tempo
+    if (isPlugin())
+        if (auto* ph = getPlayHead())
+            if (auto pos = ph->getPosition())
+                if (auto bpm = pos->getBpm()) engine.setBpm ((float) *bpm);
     engine.process (buffer, getTotalNumInputChannels(), midi);
 }
 

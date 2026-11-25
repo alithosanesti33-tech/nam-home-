@@ -330,8 +330,31 @@ int Library::importFiles (const juce::Array<juce::File>& files)
 
 void Library::timerCallback()
 {
+    if (pluginMode)
+    {
+        // every ~6 s: has the app (or Finder) added or removed anything in the library folder?
+        if (++signatureTick < 2) return;
+        signatureTick = 0;
+        const auto sig = computeSignature();
+        if (folderSignature.isNotEmpty() && sig != folderSignature) { rescan(); if (onChanged) onChanged(); }
+        folderSignature = sig;
+        return;
+    }
     if (watchDownloads)
         checkDownloads();
+}
+
+juce::String Library::computeSignature() const
+{
+    juce::int64 total = 0, newest = 0;
+    int count = 0;
+    for (const auto& e : juce::RangedDirectoryIterator (folder, true, "*.nam;*.wav", juce::File::findFiles))
+    {
+        ++count;
+        total += e.getFileSize();
+        newest = juce::jmax (newest, e.getModificationTime().toMilliseconds());
+    }
+    return juce::String (count) + ":" + juce::String (total) + ":" + juce::String (newest);
 }
 
 void Library::checkDownloads()

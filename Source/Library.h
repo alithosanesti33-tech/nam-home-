@@ -45,6 +45,10 @@ public:
     void setWatchDownloads (bool shouldWatch);
     bool isWatchingDownloads() const { return watchDownloads; }
 
+    // Inside Logic (plugin): the app does the Downloads watching and TONE3000 downloads; the plugin
+    // just notices new files in the shared library folder.
+    void setPluginMode (bool isPlugin) { pluginMode = isPlugin; }
+
     // User tags (saved in library.json inside the library folder)
     void setMicTag (const juce::String& path, const juce::String& tag);
     void setCreator (const juce::String& path, const juce::String& creator);
@@ -73,6 +77,10 @@ private:
     juce::StringArray newPaths;
 
     bool watchDownloads = true;
+    bool pluginMode = false;
+    juce::String folderSignature;
+    int signatureTick = 0;
+    juce::String computeSignature() const;
     juce::int64 watchStartMs = 0;            // only files that arrive after watching began
     juce::StringArray handledDownloads;      // "path|size|mtime"
     std::map<juce::String, juce::int64> pendingSizes; // wait for downloads to finish

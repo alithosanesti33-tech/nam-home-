@@ -13,7 +13,8 @@ juce_add_plugin(NAMHome
     BUNDLE_ID com.namhome.app
     PLUGIN_MANUFACTURER_CODE NmHm
     PLUGIN_CODE NmH1
-    FORMATS Standalone
+    FORMATS Standalone AU
+    AU_MAIN_TYPE kAudioUnitType_MusicEffect
     PRODUCT_NAME "NAM Home"
     DESCRIPTION "A home for NAM captures and cabinet IRs"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"

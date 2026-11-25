@@ -21,8 +21,8 @@ jobs:
           cd "$HOME/NAMCore" && git submodule update --init --depth 1 Dependencies/eigen
       - name: Configure
         run: cmake -B build -S . -DJUCE_PATH="$HOME/JUCE" -DNAM_CORE_PATH="$HOME/NAMCore" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-      - name: Build app
-        run: cmake --build build --config Release --target NAMHome_Standalone -j
+      - name: Build app and Logic plugin (AU)
+        run: cmake --build build --config Release --target NAMHome_Standalone NAMHome_AU -j
       - name: Check that every NAM capture type loads in the built app
         run: |
           APP="build/NAMHome_artefacts/Release/Standalone/NAM Home.app/Contents/MacOS/NAM Home"
@@ -30,16 +30,34 @@ jobs:
       - name: Full-size app icon (every size macOS asks for, Apple template shape)
         run: iconutil -c icns Resources/NAMHome.iconset -o "build/NAMHome_artefacts/Release/Standalone/NAM Home.app/Contents/Resources/Icon.icns"
       - name: Sign locally
-        run: codesign --force --deep --sign - "build/NAMHome_artefacts/Release/Standalone/NAM Home.app"
-      - name: Zip app
-        run: cd build/NAMHome_artefacts/Release/Standalone && ditto -c -k --keepParent "NAM Home.app" "$GITHUB_WORKSPACE/NAM-Home.zip"
+        run: |
+          codesign --force --deep --sign - "build/NAMHome_artefacts/Release/Standalone/NAM Home.app"
+          codesign --force --deep --sign - "build/NAMHome_artefacts/Release/AU/NAM Home.component"
+      - name: Check the plugin passes Logic's validation (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/NAMHome_artefacts/Release/AU/NAM Home.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 3
+          auval -a | grep -i "NmHm" || true
+          perl -e 'alarm 300; exec @ARGV' auval -v aumf NmH1 NmHm
+      - name: Zip app and plugin
+        run: |
+          mkdir -p dist
+          cp -R "build/NAMHome_artefacts/Release/Standalone/NAM Home.app" dist/
+          cp -R "build/NAMHome_artefacts/Release/AU/NAM Home.component" dist/
+          cd dist && ditto -c -k --keepParent "NAM Home.app" "$GITHUB_WORKSPACE/NAM-Home.zip"
+          ditto -c -k --keepParent "NAM Home.component" "$GITHUB_WORKSPACE/NAM-Home-AU.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: NAM-Home
-          path: NAM-Home.zip
+          path: |
+            NAM-Home.zip
+            NAM-Home-AU.zip
       - name: Publish latest release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view latest >/dev/null 2>&1 || gh release create latest --title "Latest build" --notes "Newest NAM Home build. Install or update with ~/namupdate.sh"
-          gh release upload latest NAM-Home.zip --clobber
+          gh release upload latest NAM-Home.zip NAM-Home-AU.zip --clobber

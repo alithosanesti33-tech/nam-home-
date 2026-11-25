@@ -11,6 +11,16 @@ sleep 1
 rm -rf "$APP"
 ditto -x -k "$TMP/NAM-Home.zip" /Applications/
 xattr -cr "$APP"
+# the Logic plugin (Audio Unit)
+COMP_DIR="$HOME/Library/Audio/Plug-Ins/Components"
+if curl -fsL "https://github.com/alithosanesti33-tech/nam-home-/releases/download/latest/NAM-Home-AU.zip" -o "$TMP/NAM-Home-AU.zip"; then
+  mkdir -p "$COMP_DIR"
+  rm -rf "$COMP_DIR/NAM Home.component"
+  ditto -x -k "$TMP/NAM-Home-AU.zip" "$COMP_DIR/"
+  xattr -cr "$COMP_DIR/NAM Home.component"
+  killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
+  echo "Logic plugin installed (Audio Units > NAM Home > NAM Home)."
+fi
 rm -rf "$TMP"
 # make Finder and the Dock show the current icon instead of a cached one
 touch "$APP"

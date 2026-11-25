@@ -131,6 +131,13 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     browseT3k.setTooltip ("Pick tones on TONE3000 and download them into your library");
     browseT3k.onClick = [this]
     {
+        if (proc.isPlugin())
+        {
+            // the TONE3000 sign-in comes back to the NAM Home app, so browsing happens there;
+            // the library folder is shared, so anything downloaded shows up here within seconds
+            message ("Browse TONE3000 from the NAM Home app. Anything you download there shows up here automatically.");
+            return;
+        }
         PopupMenu m;
         m.addItem (1, "Amp and pedal captures (NAM)");
         m.addItem (2, "Cabinet IRs");
@@ -212,7 +219,8 @@ NAMHomeEditor::~NAMHomeEditor()
 void NAMHomeEditor::applyDisplaySettings()
 {
     theme::fontScale() = (float) proc.settings().getDoubleValue ("fontSize", 100.0) / 100.0f;
-    Desktop::getInstance().setGlobalScaleFactor ((float) proc.settings().getDoubleValue ("zoom", 100.0) / 100.0f);
+    if (! proc.isPlugin())   // inside Logic a global zoom would resize every plugin window
+        Desktop::getInstance().setGlobalScaleFactor ((float) proc.settings().getDoubleValue ("zoom", 100.0) / 100.0f);
     library.refresh();
     resized();
     repaint();
@@ -280,8 +288,8 @@ void NAMHomeEditor::resized()
 
     settingsBtn.setBounds (t.removeFromRight (36));
     t.removeFromRight (4);
-    fullBtn.setBounds (t.removeFromRight (36));
-    t.removeFromRight (4);
+    fullBtn.setVisible (! proc.isPlugin());   // Logic owns the plugin window
+    if (! proc.isPlugin()) { fullBtn.setBounds (t.removeFromRight (36)); t.removeFromRight (4); }
     tunerBtn.setBounds (t.removeFromRight (36));
     if (liveTuner != nullptr && liveTuner->isVisible()) { t.removeFromRight (8); liveTuner->setBounds (t.removeFromRight (170)); }
     t.removeFromRight (16);

@@ -51,6 +51,7 @@ public:
     Library library;
     PresetManager presets;
     juce::PropertiesFile& settings() { return *appSettings; }
+    bool isPlugin() const { return wrapperType != wrapperType_Standalone; }
     std::unique_ptr<Tone3000> tone3000;
 
     // presets
