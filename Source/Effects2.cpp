@@ -916,7 +916,10 @@ FreezeBlock::FreezeBlock() : Block (Type::Freeze)
     addFloat ("width", "Width", 0, 150, 100, "%", -1, 1);
     currentGroup = "Sequencer";
     addToggle ("seqOn", "Sequencer", false);
-    addChoice ("seqSteps", "Steps", { "8", "16" }, 0);
+    {
+        juce::StringArray lens; for (int k = 1; k <= 16; ++k) lens.add (juce::String (k));
+        addChoice ("seqLength", "Steps", lens, 7);   // any length from 1 to 16 (4, 5, 7, 12...)
+    }
     addChoice ("seqRate", "Step length", { "1/2", "1/4", "1/8 dot", "1/8", "1/8 trip", "1/16" }, 3);
     addFloat ("seqGlide", "Glide", 0, 500, 0, "ms", 120, 1);
     addChoice ("seqRun", "Runs", { "While held", "With MIDI start / stop (or Logic's transport)" }, 0);
@@ -928,7 +931,7 @@ FreezeBlock::FreezeBlock() : Block (Type::Freeze)
         params[(size_t) i]->visible = [stepIdx] (const Block& b)
         {
             if (! b.params[(size_t) fSeqOn]->on()) return false;
-            return stepIdx < 8 || b.params[(size_t) fSeqSteps]->getInt() == 1;   // steps 9-16 only in 16-step mode
+            return stepIdx < 0 || stepIdx < b.params[(size_t) fSeqSteps]->getInt() + 1;   // only the steps in use
         };
     }
     currentGroup = {};
@@ -1148,7 +1151,7 @@ std::vector<Block::StartingPoint> FreezeBlock::startingPoints() const
             { "shimmer", 20 }, { "mod", 30 }, { "width", 130 }, { "seqOn", 0 } } },
         { "Pulsing octaves (sequencer)",
           "Eighth-note steps between root, octave and fifth, in time with the tempo.",
-          { { "mode", 0 }, { "fadeIn", 200 }, { "fadeOut", 2500 }, { "tone", 7000 }, { "seqOn", 1 }, { "seqSteps", 0 }, { "seqRate", 3 },
+          { { "mode", 0 }, { "fadeIn", 200 }, { "fadeOut", 2500 }, { "tone", 7000 }, { "seqOn", 1 }, { "seqLength", 7 }, { "seqRate", 3 },
             { "seqGlide", 0 }, { "seqRun", 0 },
             { "sp0", 0 }, { "sp1", 12 }, { "sp2", 7 }, { "sp3", 12 }, { "sp4", 0 }, { "sp5", 12 }, { "sp6", 5 }, { "sp7", 7 },
             { "sv0", 100 }, { "sv1", 70 }, { "sv2", 85 }, { "sv3", 60 }, { "sv4", 100 }, { "sv5", 70 }, { "sv6", 85 }, { "sv7", 60 } } },
@@ -1159,7 +1162,7 @@ void FreezeBlock::advanceSequencer (int n)
 {
     static const float beatsPerStep[] = { 2.0f, 1.0f, 0.75f, 0.5f, 1.0f / 3.0f, 0.25f };
     auto& ctx = context();
-    const int steps = (int) p (fSeqSteps) == 1 ? 16 : 8;
+    const int steps = juce::jlimit (1, 16, (int) p (fSeqSteps) + 1);
     const float bps = beatsPerStep[juce::jlimit (0, 5, (int) p (fSeqRate))];
     const bool followTransport = (int) p (fSeqRun) == 1;
     bool run;
