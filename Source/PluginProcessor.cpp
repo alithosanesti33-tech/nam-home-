@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "Rhythm.h"
 #include "PluginEditor.h"
 
 //==============================================================================
@@ -67,7 +68,8 @@ NAMHomeProcessor::NAMHomeProcessor()
     }
     loadSetlist (appSettings->getValue ("setlist"));
     loadOutputSettings();
-    ndsp::SaxSampleBank::get().setRoot (library.getFolder());   // recordings live next to your captures (on your SSD)
+    ndsp::SaxSampleBank::get().setRoot (library.getFolder());
+    rhythm::setLibraryFolder (library.getFolder());   // loops and drum sounds live on the same drive   // recordings live next to your captures (on your SSD)
     {
         // tell the installer where the library is, so downloads (sax recordings) land on the same drive
         auto f = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)

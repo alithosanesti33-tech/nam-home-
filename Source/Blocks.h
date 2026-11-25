@@ -18,6 +18,7 @@ struct Param
     std::function<bool (const Block&)> visible;   // hidden for types where it does nothing
     bool realControl = true;                      // false = "added shaping" around a capture (drawn grey)
     juce::String group;                           // editor section (blocks with many controls)
+    bool momentary = false;                       // a footswitch "press" (looper, drums): scenes leave it alone
 
     float get() const { return value.load(); }
     int getInt() const { return (int) std::lround (value.load()); }
@@ -36,6 +37,8 @@ struct EngineContext
     std::atomic<bool> running { false };
     std::atomic<int> starts { 0 };          // goes up on every Start, so sequencers restart on beat 1
     std::atomic<double> hostBeats { -1.0 }; // Logic's song position in beats while playing, else -1
+    // the looper tells the drums when a loop starts and stops ("Starts with the looper")
+    std::atomic<int> looperStarts { 0 }, looperStops { 0 };
 };
 
 class Block
@@ -45,7 +48,7 @@ public:
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
         GraphicEQ, ParametricEQ, Delay, Reverb, TriChorus, Utility, PhatTrack, Sax,
-        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, NumTypes
+        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, NumTypes
     };
 
     explicit Block (Type t);

@@ -127,6 +127,9 @@ void Drawer::sync()
         power.repaint();
         midi.lit = proc.engine.describeMapping (b->id, -1).isNotEmpty();
         midi.repaint();
+        // live status in the title (looper state, drum groove...)
+        const auto t = b->getTitle();
+        if (t != lastTitle) { lastTitle = t; repaint (0, 0, getWidth(), 54); }
     }
     if (editor != nullptr) editor->sync();
 }

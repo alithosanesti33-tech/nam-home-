@@ -156,7 +156,8 @@ void LibraryPanel::refresh()
         }
         if (! sx.empty()) { addSection ("Saxophone"); shown.insert (shown.end(), sx.begin(), sx.end()); }
     }
-    if (all || filter == 5) addBuiltIns ("Built-in effects", [] (Block::Type t) { return Block::categoryName (t) != "Synthesizers" && Block::categoryName (t) != "Saxophone"; });
+    if (all || filter == 5) addBuiltIns ("Built-in effects", [] (Block::Type t) { const auto c = Block::categoryName (t); return c != "Synthesizers" && c != "Saxophone" && c != "Looper & drums"; });
+    if (all || filter == 5) addBuiltIns ("Looper & drums", [] (Block::Type t) { return Block::categoryName (t) == "Looper & drums"; });
     list.updateContent();
     list.repaint();
     repaint();

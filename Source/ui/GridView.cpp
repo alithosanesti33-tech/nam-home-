@@ -286,6 +286,29 @@ void GridView::drawIcon (Graphics& g, Block& b, Rectangle<float> r, Colour c)
             g.setColour (dark ? line : c); g.fillEllipse (box.getRight() - s * 0.24f, box.getY() + s * 0.36f, s * 0.26f, s * 0.14f);
             break;
         }
+        case T::Looper:
+        {
+            // a circle with an arrow: a loop
+            Path a; a.addCentredArc (box.getCentreX(), box.getCentreY(), s * 0.34f, s * 0.34f, 0.0f, 0.5f, 5.8f, true);
+            stroke (a, lw * 1.5f);
+            const float ex = box.getCentreX() + std::sin (0.5f) * s * 0.34f, ey = box.getCentreY() - std::cos (0.5f) * s * 0.34f;
+            Path h; h.addTriangle (ex - s * 0.13f, ey - s * 0.1f, ex + s * 0.06f, ey + s * 0.12f, ex - s * 0.17f, ey + s * 0.12f);
+            g.setColour (dark ? line : c); g.fillPath (h);
+            g.fillEllipse (box.getCentreX() - s * 0.08f, box.getCentreY() - s * 0.08f, s * 0.16f, s * 0.16f);
+            break;
+        }
+        case T::Drums:
+        {
+            // a snare drum with two sticks
+            auto shell = box.withSizeKeepingCentre (s * 0.8f, s * 0.42f).translated (0, s * 0.14f);
+            Path p; p.addRectangle (shell.withTrimmedTop (shell.getHeight() * 0.25f)); fillStroke (p);
+            Path top; top.addEllipse (shell.withHeight (shell.getHeight() * 0.5f)); fillStroke (top);
+            Path st;
+            st.startNewSubPath (box.getX() + s * 0.2f, box.getY() + s * 0.02f); st.lineTo (box.getCentreX() + s * 0.05f, shell.getY() + s * 0.06f);
+            st.startNewSubPath (box.getRight() - s * 0.2f, box.getY() + s * 0.02f); st.lineTo (box.getCentreX() - s * 0.05f, shell.getY() + s * 0.06f);
+            stroke (st, lw * 1.3f);
+            break;
+        }
         case T::Gate: case T::Utility:
         {
             auto bx = box.withSizeKeepingCentre (s * 0.8f, s * 0.5f);

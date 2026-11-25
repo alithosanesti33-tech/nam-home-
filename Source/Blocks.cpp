@@ -1,5 +1,6 @@
 #include "Blocks.h"
 #include "BlockTypes.h"
+#include "Rhythm.h"
 
 juce::String Param::text() const
 {
@@ -135,7 +136,7 @@ juce::var Block::toVar() const
     o->setProperty ("type", typeName (type));
     o->setProperty ("enabled", enabled.load());
     auto* ps = new juce::DynamicObject();
-    for (auto& prm : params) ps->setProperty (prm->id, prm->get());
+    for (auto& prm : params) if (! prm->momentary) ps->setProperty (prm->id, prm->get());
     o->setProperty ("params", juce::var (ps));
     o->setProperty ("extra", saveExtra());
     return juce::var (o);
@@ -229,6 +230,8 @@ juce::String Block::typeName (Type t)
         case Type::Vibrato:      return "Vibrato";
         case Type::Rotary:       return "Rotary";
         case Type::Vibe:         return "Vibe";
+        case Type::Looper:       return "Looper";
+        case Type::Drums:        return "Drums";
         case Type::NumTypes:     break;
     }
     return {};
@@ -246,6 +249,7 @@ juce::String Block::categoryName (Type t)
         case Type::Gate: case Type::Utility: return "Utility";
         case Type::PhatTrack: return "Synthesizers";
         case Type::Sax: return "Saxophone";
+        case Type::Looper: case Type::Drums: return "Looper & drums";
         default: return "Effects";
     }
 }
@@ -265,6 +269,8 @@ juce::Colour Block::colour (Type t)
                                  return juce::Colour (0xff8a8f98);
         case Type::PhatTrack:    return juce::Colour (0xffff7a59);
         case Type::Sax:          return juce::Colour (0xffe8c547);
+        case Type::Looper:       return juce::Colour (0xffe5484d);
+        case Type::Drums:        return juce::Colour (0xff4f9fe0);
         default:                 return juce::Colour (0xffe26ba8);
     }
 }
@@ -305,6 +311,8 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Vibrato:      return std::make_unique<VibratoBlock>();
         case Type::Rotary:       return std::make_unique<RotaryBlock>();
         case Type::Vibe:         return std::make_unique<VibeBlock>();
+        case Type::Looper:       return std::make_unique<LooperBlock>();
+        case Type::Drums:        return std::make_unique<DrumsBlock>();
         case Type::NumTypes:     break;
     }
     return nullptr;

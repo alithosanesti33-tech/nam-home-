@@ -109,7 +109,7 @@ void Engine::applyScene (const SceneState& sc)
             b->enabled = it->second.first;
             const auto& vals = it->second.second;
             for (size_t i = 0; i < b->params.size() && i < vals.size(); ++i)
-                if (b->params[i]->get() != vals[i]) b->params[i]->set (vals[i]);
+                if (! b->params[i]->momentary && b->params[i]->get() != vals[i]) b->params[i]->set (vals[i]);
         }
 }
 

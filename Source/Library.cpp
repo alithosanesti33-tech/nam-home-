@@ -247,13 +247,22 @@ LibraryItem Library::readItem (const juce::File& f) const
     return it;
 }
 
+// sax recordings, loops and drum sounds live in the library folder too, but they aren't IRs
+static bool isMediaFile (const juce::File& f, const juce::File& root)
+{
+    const auto rel = f.getRelativePathFrom (root).replaceCharacter ('\\', '/');
+    for (auto* top : { "Instruments/", "Loops/", "Drums/", "Setlists/", "Presets/" })
+        if (rel.startsWithIgnoreCase (top)) return true;
+    return false;
+}
+
 void Library::rescan()
 {
     items.clear();
     for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*.nam;*.wav", juce::File::findFiles))
     {
         const auto f = entry.getFile();
-        if (f.getFileName().startsWithChar ('.') || f.getFullPathName().contains ("__MACOSX"))
+        if (f.getFileName().startsWithChar ('.') || f.getFullPathName().contains ("__MACOSX") || isMediaFile (f, folder))
             continue;
         items.push_back (readItem (f));
     }
@@ -363,6 +372,7 @@ juce::String Library::computeSignature() const
     int count = 0;
     for (const auto& e : juce::RangedDirectoryIterator (folder, true, "*.nam;*.wav", juce::File::findFiles))
     {
+        if (isMediaFile (e.getFile(), folder)) continue;
         ++count;
         total += e.getFileSize();
         newest = juce::jmax (newest, e.getModificationTime().toMilliseconds());

@@ -50,6 +50,7 @@ private:
     IconButton midi { IconButton::Icon::Midi, "MIDI learn: on/off switch for this block" };
     IconButton close { IconButton::Icon::Chevron, "Close the editor (Esc)" };
     juce::TextButton starts { "Starting points" };
+    juce::String lastTitle;
 };
 
 class NAMHomeEditor : public juce::AudioProcessorEditor,
