@@ -89,6 +89,7 @@ juce::String Block::getSubtitle() const
 
 void Block::prepareBlock (double sr, int maxBlockSize)
 {
+    prepared = true;
     sampleRate = (float) sr;
     maxBlock = juce::jmax (32, maxBlockSize);
     for (auto* v : { &dryL, &dryR, &zL, &zR }) v->assign ((size_t) maxBlock, 0.0f);

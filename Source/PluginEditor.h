@@ -36,7 +36,14 @@ public:
     std::shared_ptr<Block> current() const { return editor != nullptr ? editor->block : nullptr; }
     std::function<void()> onClose, onChanged;
     std::function<void (const juce::String&, bool)> onMessage;
+    // Logic-style: drag the top edge to resize; drag it far enough down and it closes
+    std::function<void (int deltaY, bool finished)> onResizeDrag;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 private:
+    bool resizing = false;
     NAMHomeProcessor& proc;
     std::unique_ptr<BlockEditor> editor;
     IconButton power { IconButton::Icon::Power, "Switch this block on or off (double-click the tile also works)" };
@@ -105,6 +112,7 @@ private:
     std::unique_ptr<SettingsSheet> settingsSheet;
 
     bool libraryOpen = true, drawerOpen = false;
+    int drawerHeight = 340, drawerDragStart = 340, drawerLive = -1;
     double cpu = 0;
     juce::Rectangle<int> topBar;
 };

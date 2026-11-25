@@ -70,6 +70,7 @@ public:
     Param* param (const juce::String& pid) const;
 
     void prepareBlock (double sampleRate, int maxBlockSize);
+    bool isPrepared() const { return prepared; }
     void run (float* L, float* R, int n);           // bypass crossfade + trails
 
     virtual void reset() {}
@@ -96,6 +97,7 @@ protected:
     Type type;
     float sampleRate = 48000.0f;
     int maxBlock = 512;
+    bool prepared = false;
 
 private:
     std::vector<float> dryL, dryR, zL, zR;

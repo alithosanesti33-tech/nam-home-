@@ -45,6 +45,9 @@ public:
     // insert-style editing: put a block at a position in a row; the blocks after it slide over
     bool insertInRow (int r, int index, std::shared_ptr<Block> b);
     void removeFromRow (int r, int c, bool closeGap);
+    // replace a row's blocks with this list, packed from 'startCol' (already-prepared blocks keep their state)
+    bool setRow (int r, int startCol, const std::vector<std::shared_ptr<Block>>& blocks);
+    std::vector<std::shared_ptr<Block>> rowBlocks (int r) const;
     std::atomic<float> inputPeaks[2] { { 0 }, { 0 } };
 
     // ---- global controls

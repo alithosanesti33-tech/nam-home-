@@ -74,13 +74,8 @@ NAMHomeProcessor::~NAMHomeProcessor() { stopTimer(); tone3000 = nullptr; }
 
 void NAMHomeProcessor::buildDefaultRig()
 {
+    // a new rig is one empty line, like the Quad Cortex: drag blocks onto it
     engine.clearAll();
-    engine.addBlock (Block::Type::Gate, 0, 0);
-    engine.addBlock (Block::Type::NamAmp, 0, 1);
-    engine.addBlock (Block::Type::Cab, 0, 2);
-    engine.addBlock (Block::Type::Delay, 0, 4)->enabled = false;
-    auto rv = engine.addBlock (Block::Type::Reverb, 0, 5);
-    rv->param ("mix")->set (18);
     currentPreset = {};
     dirty = false;
 }
@@ -248,9 +243,13 @@ void NAMHomeProcessor::afterAmpLoaded (int row, int col)
     for (int c = col + 1; c < Engine::cols && cab == nullptr; ++c)
         cab = std::dynamic_pointer_cast<CabBlock> (engine.get (row, c));
     if (cab == nullptr)
-        for (int c = col + 1; c < Engine::cols && cab == nullptr; ++c)
-            if (engine.get (row, c) == nullptr)
-                cab = std::dynamic_pointer_cast<CabBlock> (engine.addBlock (Block::Type::Cab, row, c));
+        if (col + 1 < Engine::cols)
+        {
+            // the cab goes right after the amp; anything after slides over
+            std::shared_ptr<Block> nb (Block::create (Block::Type::Cab).release());
+            nb->prepareBlock (getSampleRate() > 0 ? getSampleRate() : 48000.0, juce::jmax (64, getBlockSize()));
+            if (engine.insertInRow (row, col + 1, nb)) cab = std::dynamic_pointer_cast<CabBlock> (nb);
+        }
     if (cab == nullptr) return;
 
     for (int k = 0; k < CabBlock::numIrs; ++k) cab->clearIr (k);

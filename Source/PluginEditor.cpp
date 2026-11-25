@@ -69,17 +69,23 @@ void Drawer::paint (Graphics& g)
     auto hdr = getLocalBounds().removeFromTop (54).reduced (18, 0);
     g.setColour (b->getColour());
     g.fillRoundedRectangle ((float) hdr.getX(), (float) hdr.getCentreY() - 7, 14, 14, 4.0f);
+    // the block's name, small, top left (like Cortex Control)
     g.setColour (theme::text);
-    g.setFont (theme::font (17.0f, 2));
+    g.setFont (theme::font (13.0f, 2));
     const auto title = b->getTitle();
-    const int tw = (int) GlyphArrangement::getStringWidth (theme::font (17.0f, 2), title) + 8;
+    const int tw = (int) GlyphArrangement::getStringWidth (theme::font (13.0f, 2), title) + 8;
     g.drawText (title, hdr.getX() + 24, hdr.getY(), tw, hdr.getHeight(), Justification::centredLeft);
     g.setColour (theme::muted);
-    g.setFont (theme::font (13.0f));
+    g.setFont (theme::font (12.0f));
     g.drawText (b->getTypeName() + (b->enabled.load() ? String() : String ("  ·  Off")), hdr.getX() + 32 + tw, hdr.getY(), 300, hdr.getHeight(), Justification::centredLeft);
     g.setColour (theme::line);
     g.drawHorizontalLine (54, 12.0f, (float) getWidth() - 12.0f);
 }
+
+void Drawer::mouseMove (const MouseEvent& e) { setMouseCursor (e.y < 10 ? MouseCursor::UpDownResizeCursor : MouseCursor::NormalCursor); }
+void Drawer::mouseDown (const MouseEvent& e) { resizing = e.y < 10; }
+void Drawer::mouseDrag (const MouseEvent& e) { if (resizing && onResizeDrag) onResizeDrag (e.getDistanceFromDragStartY(), false); }
+void Drawer::mouseUp (const MouseEvent& e) { if (resizing && onResizeDrag) onResizeDrag (e.getDistanceFromDragStartY(), true); resizing = false; }
 
 void Drawer::resized()
 {
@@ -182,6 +188,18 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     sceneBar.onMessage = [this] (const String& s, bool w) { message (s, w); };
 
     drawer.onClose = [this] { closeDrawer(); };
+    drawerHeight = proc.settings().getIntValue ("drawerH", 340);
+    drawer.onResizeDrag = [this] (int dy, bool finished)
+    {
+        if (drawerLive < 0) drawerDragStart = drawer.getHeight();
+        const int h = drawerDragStart - dy;
+        if (! finished) { drawerLive = h; resized(); return; }
+        drawerLive = -1;
+        if (h < 150) { closeDrawer(); return; }   // pulled down far enough: it closes
+        drawerHeight = h;
+        proc.settings().setValue ("drawerH", drawerHeight);
+        resized();
+    };
     drawer.onChanged = [this] { grid.repaint(); };
     drawer.onMessage = [this] (const String& s, bool w) { message (s, w); };
 
@@ -308,7 +326,9 @@ void NAMHomeEditor::resized()
     }
     if (drawerOpen)
     {
-        drawer.setBounds (r.removeFromBottom (jlimit (300, 380, (int) (getHeight() * 0.42f))));
+        const int maxH = (int) (getHeight() * 0.75f);
+        const int h = drawerLive >= 0 ? jlimit (60, maxH, drawerLive) : jlimit (180, maxH, drawerHeight);
+        drawer.setBounds (r.removeFromBottom (h));
         r.removeFromBottom (12);
     }
     sceneBar.setBounds (r.removeFromBottom (42));

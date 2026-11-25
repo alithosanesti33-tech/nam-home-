@@ -189,6 +189,28 @@ void Engine::removeFromRow (int r, int c, bool closeGap)
     publish();
 }
 
+bool Engine::setRow (int r, int startCol, const std::vector<std::shared_ptr<Block>>& blocks)
+{
+    if (startCol < 0 || startCol + (int) blocks.size() > cols) return false;
+    auto& row = cells[(size_t) r];
+    for (auto& c : row) c = nullptr;
+    for (size_t i = 0; i < blocks.size(); ++i)
+    {
+        auto b = blocks[i];
+        if (b != nullptr && ! b->isPrepared()) b->prepareBlock (sampleRate, maxBlock);
+        row[(size_t) startCol + i] = b;
+    }
+    publish();
+    return true;
+}
+
+std::vector<std::shared_ptr<Block>> Engine::rowBlocks (int r) const
+{
+    std::vector<std::shared_ptr<Block>> v;
+    for (auto& c : cells[(size_t) r]) if (c != nullptr) v.push_back (c);
+    return v;
+}
+
 bool Engine::rowSpan (int r, int& first, int& last) const
 {
     first = cols; last = -1;

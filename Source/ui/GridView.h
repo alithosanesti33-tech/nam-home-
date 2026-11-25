@@ -25,13 +25,13 @@ public:
 
     bool isInterestedInDragSource (const SourceDetails&) override { return true; }
     void itemDragMove (const SourceDetails&) override;
-    void itemDragEnter (const SourceDetails&) override { dragging = true; resized(); repaint(); }
-    void itemDragExit (const SourceDetails&) override { dropCell = { -1, -1 }; dragging = false; resized(); repaint(); }
+    void itemDragEnter (const SourceDetails&) override { dragging = true; repaint(); }
+    void itemDragExit (const SourceDetails&) override { clearDrop(); repaint(); }
     void itemDropped (const SourceDetails&) override;
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
-    void fileDragMove (const juce::StringArray&, int x, int y) override { dropCell = cellAt ({ x, y }); repaint(); }
-    void fileDragEnter (const juce::StringArray&, int, int) override { dragging = true; resized(); repaint(); }
-    void fileDragExit (const juce::StringArray&) override { dropCell = { -1, -1 }; dragging = false; resized(); repaint(); }
+    void fileDragMove (const juce::StringArray&, int x, int y) override { updateDrop ({ x, y }, true); repaint(); }
+    void fileDragEnter (const juce::StringArray&, int, int) override { dragging = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { clearDrop(); repaint(); }
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
     juce::Point<int> selected { 0, 1 };              // x = column, y = row
@@ -51,7 +51,7 @@ public:
     int displayIndex (int r) const;
     int numShownRows() const;
     std::set<int> openedRows;          // empty branches the user added
-    bool dragging = false;             // while dragging, every row is a drop target
+    bool dragging = false;
     void showInputMenu (int row);
 
 private:
@@ -60,6 +60,16 @@ private:
     float mergeX (int row) const;
     float splitX (int row) const;
     void drawTile (juce::Graphics&, Block& b, juce::Rectangle<float> r, bool isSelected);
+    static void drawIcon (juce::Graphics&, Block& b, juce::Rectangle<float> r, juce::Colour c);
+    // insert-style dropping: blocks after the drop point slide over to make room
+    int rowStart (int r) const;                       // first column a row's chain starts at
+    int visibleCols() const;
+    void updateDrop (juce::Point<int> p, bool files);
+    void clearDrop() { dropRow = dropIndex = -1; dropOnto = { -1, -1 }; dragging = false; dragFrom = { -1, -1 }; dropCell = { -1, -1 }; }
+    bool insertBlock (int row, int index, std::shared_ptr<Block> b, juce::Point<int> from = { -1, -1 });
+    int slotIndexFor (int row, float x) const;
+    int dropRow = -1, dropIndex = -1;
+    juce::Point<int> dropOnto { -1, -1 }, dragFrom { -1, -1 };
 
     NAMHomeProcessor& proc;
     float tile = 90, gap = 16, rowPitch = 120, x0 = 60, y0 = 20;
