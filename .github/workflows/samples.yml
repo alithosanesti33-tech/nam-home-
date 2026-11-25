@@ -1,0 +1,33 @@
+name: Fetch sax recordings
+# Downloads the University of Iowa MIS alto and soprano saxophone recordings ("may be downloaded
+# and used for any projects, without restrictions"), slices them into one file per note and
+# pushes them to the 'samples' branch.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download
+        run: |
+          mkdir -p src
+          B="https://theremin.music.uiowa.edu/sound%20files/MIS/Woodwinds"
+          for d in pp mf ff; do
+            for r in Db3B3 C4B4 C5Ab5; do curl -fsSL "$B/altosaxophone/AltoSax.NoVib.$d.$r.aiff" -o "src/AltoSax.NoVib.$d.$r.aiff" || echo "missing alto $d $r"; done
+            for r in Ab3B3 C4B4 C5B5 C6Eb6; do curl -fsSL "$B/sopranosaxophone/SopSax.NoVib.$d.$r.aiff" -o "src/SopSax.NoVib.$d.$r.aiff" || echo "missing soprano $d $r"; done
+          done
+          ls -la src
+      - name: Slice
+        run: |
+          pip install numpy soundfile
+          python3 scripts/slice_sax.py src out
+      - name: Push to samples branch
+        run: |
+          cd out
+          git init -q -b samples
+          git config user.name "NAM Home build"; git config user.email "build@users.noreply.github.com"
+          git add -A && git commit -qm "Sax recordings (University of Iowa MIS), one file per note"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" samples
