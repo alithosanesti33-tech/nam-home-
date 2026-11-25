@@ -71,7 +71,7 @@ void PhatTrackBlock::prepare (double sr, int)
 void PhatTrackBlock::reset()
 {
     tracker.reset(); voice.reset();
-    glideMidi = 60.0f; lastHz = 0;
+    glideMidi = 60.0f; lastHz = 0; glideOff = 0; lastNote = 60.0f;
     everValid = false;
     validGain = dryGate = 0;
 }
@@ -127,10 +127,16 @@ void PhatTrackBlock::process (float* L, float* R, int n)
 
         if (f.valid)
         {
-            if (! everValid) glideMidi = f.midi;   // first pitch after silence: no glide from the last note
+            if (! everValid) { glideOff = 0; lastNote = f.midi; }   // first pitch after silence: no glide from the last note
             everValid = true;
         }
-        if (everValid) glideMidi += glideCoef * (f.midi - glideMidi);
+        // glide only between notes (a jump of more than ~2/3 semitone is a new note); bends and
+        // vibrato are followed exactly, with no smoothing lag
+        const float jump = f.midi - lastNote;
+        if (everValid && std::abs (jump) >= 0.7f) glideOff -= jump;
+        lastNote = f.midi;
+        glideOff += glideCoef * (0.0f - glideOff);
+        glideMidi = f.midi + glideOff;
         if (f.valid) lastHz = tracker.hz();
 
         validGain += validCoef * ((everValid ? 1.0f : 0.0f) - validGain);

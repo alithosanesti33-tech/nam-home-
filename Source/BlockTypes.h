@@ -326,7 +326,7 @@ private:
     ndsp::GuitarTracker tracker;   // shared with the Saxophone: no old-note blips on re-picks
     phat::Voice voice;
     double rate = 48000.0;
-    float glideMidi = 60, lastHz = 0;
+    float glideMidi = 60, lastHz = 0, glideOff = 0, lastNote = 60;
     bool everValid = false;
     float validGain = 0, dryGate = 0;
     float validCoef = 0.05f, dryAtk = 0.01f, dryRel = 0.001f;
