@@ -64,6 +64,14 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+    void parentHierarchyChanged() override;
+    // shortcuts (Cmd+Z...) work wherever the keyboard focus is, even after a menu closes
+    struct KeyRelay : juce::KeyListener
+    {
+        NAMHomeEditor& e; explicit KeyRelay (NAMHomeEditor& ed) : e (ed) {}
+        bool keyPressed (const juce::KeyPress& k, juce::Component*) override { return e.keyPressed (k); }
+    } keyRelay { *this };
+    juce::Component::SafePointer<juce::Component> keyTop;
 
     void message (const juce::String& s, bool warning = false) { toasts.show (s, warning); }
     void toggleFullscreen();

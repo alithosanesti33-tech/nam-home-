@@ -87,6 +87,11 @@ public:
     void setReferenceLevel (float db) { appSettings->setValue ("levelRef", db); }
     juce::String matchPresetLevel();    // sets this preset's trim so it plays at the reference level
     juce::String matchScenesToA();      // every scene plays as loud as scene A
+    float presetLevelNow() const;       // this preset's loudness with its trim (for the reference)
+    void rememberLevelsForUndo();
+    bool undoLevelMatch();
+    bool canUndoLevelMatch() const { return ! levelUndo.empty(); }
+    std::vector<float> levelUndo;
 
     // ---- output EQ (the whole app) and profiles
     static juce::StringArray outputProfileNames();

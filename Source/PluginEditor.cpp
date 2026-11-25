@@ -265,6 +265,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
 
 NAMHomeEditor::~NAMHomeEditor()
 {
+    if (keyTop != nullptr) keyTop->removeKeyListener (&keyRelay);
     proc.settings().setValue ("winW", getWidth());
     proc.settings().setValue ("winH", getHeight());
     proc.onNotice = nullptr; proc.onRigChanged = nullptr;
@@ -492,6 +493,15 @@ void NAMHomeEditor::timerCallback()
         wasLearning = learning;
         repaint (grid.getBounds().withHeight (30));
     }
+}
+
+void NAMHomeEditor::parentHierarchyChanged()
+{
+    auto* top = getTopLevelComponent();
+    if (top == keyTop.getComponent()) return;
+    if (keyTop != nullptr) keyTop->removeKeyListener (&keyRelay);
+    keyTop = top;
+    if (top != nullptr && top != this) top->addKeyListener (&keyRelay);
 }
 
 bool NAMHomeEditor::keyPressed (const KeyPress& k)

@@ -58,8 +58,14 @@ public:
     std::atomic<int> outEqVersion { 0 };
     // level matching: each scene has a trim; the preset has one too. Loudness is measured while you play.
     std::atomic<float> presetTrimDb { 0 };
-    std::atomic<float> sceneLoudness[8] { { -100 }, { -100 }, { -100 }, { -100 }, { -100 }, { -100 }, { -100 }, { -100 } };
-    std::atomic<float> presetLoudness { -100 };
+    // Loudness is measured like Logic's LUFS meter (ITU BS.1770: K-weighted, 400 ms blocks, gated so
+    // pauses, decays and hum don't count). Scenes are measured before their trim, so matching twice
+    // gives the same answer. Meter 0-7 = scenes A-H, meter 8 = the whole preset (before its own trim).
+    static constexpr int presetMeter = 8, loudBins = 160;   // 0.5 dB bins from -70 to +10
+    std::atomic<int> loudHist[9][loudBins] {};
+    float measuredLoudness (int meter, int* seconds = nullptr) const;   // < -90 when there isn't enough playing yet
+    void resetLoudness (int meter);
+    bool sceneIsUsed (int s) const;   // has been visited / set up
     float sceneTrim (int s) const;
     void setSceneTrim (int s, float db);
     // spillover: delay / reverb / freeze tails keep ringing for a few seconds after a preset change
@@ -179,6 +185,10 @@ private:
     std::atomic<float> spillGain { 0 };
     float trimSm = 1.0f;
     ndsp::Biquad eqF[2][7];
+    ndsp::Biquad kw[2][2];          // K-weighting for the loudness meter
+    float kwRate = 0;
+    double subE[4] {};              // last four 100 ms energies (one 400 ms block)
+    double subAcc = 0; int subN = 0, subCount = 0, loudScene = -1, loudSkip = 0;
     int eqVersionSeen = -1;
     bool eqActive = false;
     juce::AudioProcessLoadMeasurer loadMeasurer;

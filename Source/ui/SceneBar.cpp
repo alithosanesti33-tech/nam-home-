@@ -97,11 +97,13 @@ void SceneBar::showMenu (int i)
     if (midi.isNotEmpty()) m.addItem (3, "Clear MIDI");
     m.addSeparator();
     PopupMenu lvl;
-    lvl.addItem (20, "Match all scenes to scene A (play each one first)");
+    lvl.addItem (20, "Match all scenes to scene A (play each one for a few seconds first)");
     lvl.addItem (21, "Match the whole preset to my reference level");
     lvl.addItem (22, "Use this preset's level as my reference");
     lvl.addSeparator();
     const float t = e.sceneTrim (i);
+    lvl.addItem (24, "Undo the last level match", proc.canUndoLevelMatch());
+    lvl.addItem (25, "Measure again (after changing sounds)");
     lvl.addItem (23, "Reset this scene's level (now " + (t >= 0 ? juce::String ("+") : juce::String()) + juce::String (t, 1) + " dB)", std::abs (t) > 0.05f);
     m.addSubMenu ("Level matching", lvl);
     m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (padBounds (i).toNearestInt())),
@@ -113,11 +115,13 @@ void SceneBar::showMenu (int i)
         if (r == 21) say (proc.matchPresetLevel());
         if (r == 22)
         {
-            const float l = en.presetLoudness.load();
+            const float l = proc.presetLevelNow();
             if (l < -90.0f) say ("Play this preset for a few seconds first.");
             else { proc.setReferenceLevel (l); say ("Reference level set. Use \"Match the whole preset\" on your other presets."); }
         }
-        if (r == 23) { en.setSceneTrim (i, 0.0f); proc.dirty = true; }
+        if (r == 23) { proc.rememberLevelsForUndo(); en.setSceneTrim (i, 0.0f); proc.dirty = true; }
+        if (r == 24) say (proc.undoLevelMatch() ? "Levels put back the way they were." : "Nothing to undo.");
+        if (r == 25) { for (int m = 0; m <= Engine::presetMeter; ++m) en.resetLoudness (m); say ("Measuring again: play each scene for a few seconds."); }
         if (r == 1)
         {
             auto* aw = new AlertWindow ("Rename scene", {}, MessageBoxIconType::NoIcon);

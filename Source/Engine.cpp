@@ -197,6 +197,35 @@ void Engine::removeFromRow (int r, int c, bool closeGap)
     publish();
 }
 
+float Engine::measuredLoudness (int meter, int* seconds) const
+{
+    const auto& h = loudHist[juce::jlimit (0, presetMeter, meter)];
+    auto mean = [&h] (float gate, int& count)
+    {
+        double e = 0; count = 0;
+        for (int b = 0; b < loudBins; ++b)
+        {
+            const float lv = -70.0f + (b + 0.5f) * 0.5f;
+            const int c = h[b].load();
+            if (c == 0 || lv < gate) continue;
+            e += c * std::pow (10.0, lv / 10.0); count += c;
+        }
+        return count > 0 ? (float) (10.0 * std::log10 (e / count)) : -100.0f;
+    };
+    int c1 = 0, c2 = 0;
+    const float ungated = mean (-60.0f, c1);           // absolute gate: ignore silence and hum
+    const float integrated = mean (ungated - 10.0f, c2);  // relative gate: ignore pauses and decays
+    if (seconds != nullptr) *seconds = c2 / 10;
+    return c2 >= 20 ? integrated : -100.0f;            // needs about 2 s of playing
+}
+
+bool Engine::sceneIsUsed (int s) const { return s == currentScene.load() || scenes[(size_t) juce::jlimit (0, numScenes - 1, s)].valid; }
+
+void Engine::resetLoudness (int meter)
+{
+    for (auto& b : loudHist[juce::jlimit (0, presetMeter, meter)]) b = 0;
+}
+
 float Engine::sceneTrim (int s) const { return scenes[(size_t) juce::jlimit (0, numScenes - 1, s)].trimDb; }
 void Engine::setSceneTrim (int s, float db) { scenes[(size_t) juce::jlimit (0, numScenes - 1, s)].trimDb = juce::jlimit (-24.0f, 24.0f, db); }
 
@@ -609,6 +638,35 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         for (int i = 0; i < n; ++i)
             for (int k = 0; k < 7; ++k) { mL[i] = eqF[0][k].process (mL[i]); mR[i] = eqF[1][k].process (mR[i]); }
 
+    // loudness, before any level-matching trim
+    {
+        if (kwRate != (float) sampleRate)
+        {
+            kwRate = (float) sampleRate;
+            for (auto& c : kw) { c[0].set (ndsp::Biquad::Type::HighShelf, kwRate, 1681.0f, 0.707f, 4.0f); c[1].set (ndsp::Biquad::Type::HighPass, kwRate, 38.0f, 0.5f); }
+        }
+        const int sc = juce::jlimit (0, numScenes - 1, currentScene.load());
+        if (sc != loudScene) { loudScene = sc; loudSkip = (int) (0.5 * sampleRate); subCount = 0; subAcc = 0; subN = 0; }   // skip the old scene's tails
+        const int sub = (int) (0.1 * sampleRate);
+        for (int i = 0; i < n; ++i)
+        {
+            const float l = kw[0][1].process (kw[0][0].process (mL[i])), r = kw[1][1].process (kw[1][0].process (mR[i]));
+            if (loudSkip > 0) { --loudSkip; continue; }
+            subAcc += (double) l * l + (double) r * r;   // sum of both channels, as BS.1770 does
+            if (++subN < sub) continue;
+            subE[subCount & 3] = subAcc / subN; ++subCount; subAcc = 0; subN = 0;
+            if (subCount < 4) continue;
+            const double e = 0.25 * (subE[0] + subE[1] + subE[2] + subE[3]);
+            const float lufs = (float) (-0.691 + 10.0 * std::log10 (e + 1.0e-12));
+            auto bin = [] (float v) { return juce::jlimit (0, loudBins - 1, (int) ((v + 70.0f) * 2.0f)); };
+            if (lufs > -70.0f)
+            {
+                ++loudHist[sc][bin (lufs)];
+                ++loudHist[presetMeter][bin (lufs + sceneTrim (sc))];
+            }
+        }
+    }
+
     // output
     const float trimTarget = dbToGain (presetTrimDb.load() + sceneTrim (currentScene.load()));
     const float outG = dbToGain (outputGainDb.load());
@@ -624,20 +682,6 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         l = safe (l); r = safe (r);
         mL[i] = l; mR[i] = r;
         pkL = std::max (pkL, std::abs (l)); pkR = std::max (pkR, std::abs (r));
-    }
-    {
-        // loudness while you play (quiet moments are ignored), per scene and for the preset
-        double e = 0; for (int i = 0; i < n; ++i) e += 0.5 * (mL[i] * mL[i] + mR[i] * mR[i]);
-        const float db = (float) (10.0 * std::log10 (e / std::max (1, n) + 1.0e-12));
-        if (db > -50.0f)
-        {
-            const float a = std::min (1.0f, (float) n / (float) (sampleRate * 3.0));
-            auto& sl = sceneLoudness[juce::jlimit (0, 7, currentScene.load())];
-            const float cur = sl.load() < -90.0f ? db : sl.load();
-            sl = cur + a * (db - cur);
-            const float pcur = presetLoudness.load() < -90.0f ? db : presetLoudness.load();
-            presetLoudness = pcur + a * (db - pcur);
-        }
     }
     outputPeakL = std::max (pkL, outputPeakL.load() * 0.9f);
     outputPeakR = std::max (pkR, outputPeakR.load() * 0.9f);
@@ -783,8 +827,7 @@ void Engine::fromVar (const juce::var& v)
         spillStarted = juce::Time::getMillisecondCounterHiRes();
         spillGain = spillBlocks.empty() ? 0.0f : 1.0f;
     }
-    presetLoudness = -100.0f;
-    for (auto& l : sceneLoudness) l = -100.0f;
+    for (int m = 0; m <= presetMeter; ++m) resetLoudness (m);
     for (auto& row : cells) for (auto& b : row) b = nullptr;
     std::map<int, int> idMap;   // saved id -> new id (MIDI mappings refer to blocks by id)
 

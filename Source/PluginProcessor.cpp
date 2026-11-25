@@ -222,34 +222,65 @@ bool NAMHomeProcessor::stepSetlist (int delta)
     return loadPreset (setlist[setlistPos]);
 }
 
+void NAMHomeProcessor::rememberLevelsForUndo()
+{
+    levelUndo.clear();
+    for (int sc = 0; sc < Engine::numScenes; ++sc) levelUndo.push_back (engine.sceneTrim (sc));
+    levelUndo.push_back (engine.presetTrimDb.load());
+}
+
+bool NAMHomeProcessor::undoLevelMatch()
+{
+    if ((int) levelUndo.size() != Engine::numScenes + 1) return false;
+    for (int sc = 0; sc < Engine::numScenes; ++sc) engine.setSceneTrim (sc, levelUndo[(size_t) sc]);
+    engine.presetTrimDb = levelUndo.back();
+    levelUndo.clear();
+    dirty = true;
+    return true;
+}
+
+static juce::String signedDb (float db) { return (db >= 0 ? "+" : "") + juce::String (db, 1) + " dB"; }
+
 juce::String NAMHomeProcessor::matchPresetLevel()
 {
-    const float l = engine.presetLoudness.load();
+    const float l = engine.measuredLoudness (Engine::presetMeter);
     if (l < -90.0f) return "Play this preset for a few seconds first, so NAM Home can hear how loud it is.";
-    const float measuredWithoutTrim = l - engine.presetTrimDb.load();
-    engine.presetTrimDb = juce::jlimit (-24.0f, 24.0f, referenceLevelDb() - measuredWithoutTrim);
-    engine.presetLoudness = -100.0f;
+    rememberLevelsForUndo();
+    engine.presetTrimDb = juce::jlimit (-12.0f, 12.0f, referenceLevelDb() - l);
     dirty = true;
-    return "Preset level matched (" + juce::String (engine.presetTrimDb.load(), 1) + " dB). Save the preset to keep it.";
+    return "Preset level matched (" + signedDb (engine.presetTrimDb.load()) + "). Save the preset to keep it.";
+}
+
+float NAMHomeProcessor::presetLevelNow() const
+{
+    const float l = engine.measuredLoudness (Engine::presetMeter);
+    return l < -90.0f ? l : l + engine.presetTrimDb.load();
 }
 
 juce::String NAMHomeProcessor::matchScenesToA()
 {
-    const float a = engine.sceneLoudness[0].load();
+    const float a = engine.measuredLoudness (0);
     if (a < -90.0f) return "Play scene A for a few seconds first.";
-    int done = 0;
+    rememberLevelsForUndo();
+    juce::StringArray done, skipped;
+    bool clamped = false;
     for (int s = 1; s < Engine::numScenes; ++s)
     {
-        const float l = engine.sceneLoudness[s].load();
-        if (l < -90.0f) continue;
-        const float rawA = a - engine.sceneTrim (0), raw = l - engine.sceneTrim (s);
-        engine.setSceneTrim (s, engine.sceneTrim (0) + rawA - raw);
-        engine.sceneLoudness[s] = -100.0f;
-        ++done;
+        if (! engine.sceneIsUsed (s)) continue;
+        const float l = engine.measuredLoudness (s);   // measured before the scene's trim
+        const auto letter = juce::String::charToString ((juce::juce_wchar) ('A' + s));
+        if (l < -90.0f) { skipped.add (letter); continue; }
+        float t = engine.sceneTrim (0) + a - l;
+        if (std::abs (t) > 12.0f) { t = juce::jlimit (-12.0f, 12.0f, t); clamped = true; }
+        engine.setSceneTrim (s, t);
+        done.add (letter + " " + signedDb (t));
     }
     dirty = true;
-    return done == 0 ? juce::String ("Play each scene for a few seconds first, then match.")
-                     : "Matched " + juce::String (done) + " scene" + (done > 1 ? "s" : "") + " to scene A. Save the preset to keep it.";
+    if (done.isEmpty()) return "Play each scene for a few seconds first, then match.";
+    juce::String msg = "Matched to A: " + done.joinIntoString (", ") + ".";
+    if (skipped.size() > 0) msg << " Not played yet: " << skipped.joinIntoString (", ") << ".";
+    if (clamped) msg << " (Limited to 12 dB.)";
+    return msg + " Save the preset to keep it.";
 }
 
 void NAMHomeProcessor::buildDefaultRig()
