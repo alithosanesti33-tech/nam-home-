@@ -181,21 +181,36 @@ private:
     juce::String statusText { "loading" };
 };
 
-// One playing recording (with its own position, loop and fade)
+// One playing recording (with its own position, loop, fade and pitch)
 struct SaxPlayer
 {
     const SaxSample* s = nullptr;
     double pos = 0;
     float gain = 0, target = 0, step = 0;
+    float note = 60.0f;   // which recording note it was picked for (it keeps it while fading out)
+    float bend = 0.0f;    // its last pitch offset, frozen once it is no longer the current note
     bool active() const { return s != nullptr && (gain > 0.0f || target > 0.0f); }
 
-    void start (const SaxSample* smp, bool fromAttack, float fadeSamples)
+    void start (const SaxSample* smp, float midi, bool fromAttack, float fadeSamples)
     {
-        s = smp;
+        s = smp; note = midi; bend = 0;
         pos = fromAttack ? smp->onset : smp->sustain;
         gain = 0; target = 1; step = 1.0f / std::max (1.0f, fadeSamples);
     }
     void stop (float fadeSamples) { target = 0; step = 1.0f / std::max (1.0f, fadeSamples); }
+
+    // 4-point Hermite: linear interpolation adds a gritty, "digital" edge when re-pitching
+    static inline float hermite (const std::vector<float>& d, double p)
+    {
+        const int n = (int) d.size();
+        const int i = (int) p; const float t = (float) (p - i);
+        auto at = [&] (int k) { return d[(size_t) juce::jlimit (0, n - 1, k)]; };
+        const float xm1 = at (i - 1), x0 = at (i), x1 = at (i + 1), x2 = at (i + 2);
+        const float c1 = 0.5f * (x1 - xm1);
+        const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+        const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+        return ((c3 * t + c2) * t + c1) * t + x0;
+    }
 
     inline float tick (double rate)
     {
@@ -203,24 +218,20 @@ struct SaxPlayer
         if (gain < target) gain = std::min (target, gain + step); else if (gain > target) gain = std::max (target, gain - step);
         if (gain <= 0.0f && target <= 0.0f) { s = nullptr; return 0.0f; }
         const auto& d = s->data;
-        auto at = [&d] (double p)
-        {
-            const int i = (int) p; const float f = (float) (p - i);
-            const float a = d[(size_t) i], b = d[(size_t) std::min ((int) d.size() - 1, i + 1)];
-            return a + (b - a) * f;
-        };
-        float y = at (pos);
-        // seamless loop: in the last 60 ms before the loop end, cross-fade into the loop start
-        const double xf = 0.06 * s->rate;
+        float y = hermite (d, pos);
+        // seamless loop: in the last 80 ms before the loop end, equal-power cross-fade into the loop start
+        const double xf = 0.08 * s->rate;
         const double intoXf = pos - (s->loopEnd - xf);
         if (intoXf > 0)
         {
-            const float t = (float) (intoXf / xf);
-            y = y * std::sqrt (1.0f - t) + at (s->loopStart - xf + intoXf) * std::sqrt (t);
+            const float t = (float) juce::jlimit (0.0, 1.0, intoXf / xf);
+            y = y * std::cos (1.5707963f * t) + hermite (d, s->loopStart - xf + intoXf) * std::sin (1.5707963f * t);
         }
         pos += rate;
         if (pos >= s->loopEnd) pos = s->loopStart + (pos - s->loopEnd);
-        return y * s->gain * gain;
+        // smooth fade curve (no corner at the start or end of a fade)
+        const float g = gain * gain * (3.0f - 2.0f * gain);
+        return y * s->gain * g;
     }
 };
 
@@ -228,51 +239,74 @@ class SaxSampler
 {
 public:
     void prepare (float sampleRate) { sr = sampleRate; reset(); }
-    void reset() { for (auto& n : notes) for (auto& p : n) p = {}; cur = 0; tone.reset(); sub.reset(); }
+    void reset() { for (auto& p : players) p = {}; cur = -1; layer = 1; tone.reset(); lastFc = -1; fcCount = 0; drift = 0; driftTarget = 0; driftCount = 0; }
 
     // horn: 0 alto, 1 soprano; shiftSemis lets tenor/bari borrow the alto recordings
     void setHorn (int h, float shiftSemis) { horn = h; shift = shiftSemis; }
 
-    // kind: 0 attack (play the real attack), 1 legato (sustain to sustain), 2 tongued re-pick
-    void noteStart (float midi, int kind)
+    // kind: 0 attack (play the real attack), 1 legato (sustain to sustain), 2 tongued re-pick.
+    // breath: how hard this note is played (0..1). It picks ONE recording (pp, mf or ff) for the note,
+    // so two different takes never play on top of each other (that phasing is what sounds synthetic).
+    void noteStart (float midi, int kind, float breath)
     {
         auto& bank = SaxSampleBank::get();
         const float src = midi + shift;
-        const float fade = kind == 0 ? 0.004f : (kind == 1 ? 0.030f : 0.010f);
-        // old note fades out, a new pair of layers starts
-        for (auto& p : notes[cur]) p.stop (fade * sr);
-        cur ^= 1;
-        for (int l = 0; l < 3; ++l)
-            if (auto* s = bank.nearest (horn, l, src)) notes[cur][l].start (s, kind != 1, fade * sr);
+        const float fade = kind == 0 ? 0.003f : (kind == 1 ? 0.025f : 0.008f);
+        if (kind != 1) layer = breath < 0.42f ? 0 : (breath < 0.82f ? 1 : 2);   // legato keeps the same take
+        auto* smp = bank.nearest (horn, layer, src);
+        if (smp == nullptr) return;
+        if (cur >= 0) players[cur].stop (fade * sr);
+        // use a free slot, or the quietest one, so a slot that is still fading never gets cut off
+        int best = 0; float bestG = 2.0f;
+        for (int i = 0; i < numPlayers; ++i)
+        {
+            if (i == cur) continue;
+            const float g = players[i].active() ? players[i].gain + 1.0f : 0.0f;
+            if (g < bestG) { bestG = g; best = i; }
+        }
+        cur = best;
+        players[cur].start (smp, src, kind != 1, fade * sr);
     }
-    void noteStop (float releaseSec) { for (auto& n : notes) for (auto& p : n) p.stop (releaseSec * sr); }
-    bool sounding() const { for (auto& n : notes) for (auto& p : n) if (p.active()) return true; return false; }
+    void noteStop (float releaseSec) { for (auto& p : players) p.stop (releaseSec * sr); cur = -1; }
+    bool sounding() const { for (auto& p : players) if (p.active()) return true; return false; }
 
-    // breath 0..1 blends pp -> mf -> ff and sets the level
-    inline float tick (float midi, float breath)
+    // bend: semitones away from the current note (your bends and vibrato, scoops, falls, glides).
+    // breath 0..1 sets the level and, below the take's own dynamic, closes the tone like a real horn.
+    inline float tick (float bend, float breath)
     {
-        const float b = clamp (breath, 0.0f, 1.0f);
-        float w[3];
-        if (b < 0.5f) { const float t = b * 2.0f; w[0] = 1.0f - t; w[1] = t; w[2] = 0.0f; }
-        else          { const float t = (b - 0.5f) * 2.0f; w[0] = 0.0f; w[1] = 1.0f - t; w[2] = t; }
-        const float level = 0.18f + 0.82f * std::pow (b, 0.7f);
+        const float b = clamp (breath, 0.0f, 1.2f);
+        // a player's pitch is never perfectly still: a slow, tiny wander (about +-3 cents)
+        if (--driftCount <= 0) { driftTarget = (rnd() * 2.0f - 1.0f) * 0.03f; driftCount = (int) (sr * (0.15f + 0.3f * rnd())); }
+        drift += (driftTarget - drift) * (1.0f / (0.2f * sr));
+
         float y = 0.0f;
-        for (int n = 0; n < 2; ++n)
-            for (int l = 0; l < 3; ++l)
-            {
-                auto& p = notes[n][l];
-                if (p.s == nullptr) continue;
-                const double rate = (p.s->rate / sr) * std::exp2 ((midi - p.s->root) / 12.0f);
-                const float v = p.tick (rate);
-                y += v * w[l];
-            }
+        for (int i = 0; i < numPlayers; ++i)
+        {
+            auto& p = players[i];
+            if (p.s == nullptr) continue;
+            if (i == cur) p.bend = bend;
+            const double rate = (p.s->rate / sr) * std::exp2 ((p.note - shift + p.bend + drift - p.s->root) / 12.0);
+            y += p.tick (rate);
+        }
+        // softer than the take = darker, the way blowing softer closes a sax's tone
+        static const float ref[3] = { 0.3f, 0.65f, 0.95f };
+        const float r = clamp (b / ref[layer], 0.05f, 1.0f);
+        const float fc = clamp (18000.0f * std::pow (r, 2.2f), 900.0f, 18000.0f);
+        if (--fcCount <= 0 && std::abs (fc - lastFc) > 20.0f) { tone.set (Biquad::Type::LowPass, sr, fc, 0.6f); lastFc = fc; fcCount = 32; }
+        y = tone.process (y);
+        const float level = std::pow (clamp (b, 0.0f, 1.2f), 0.7f) * (0.55f + 0.2f * layer);
         return y * level;
     }
 
 private:
+    inline float rnd() { seed = seed * 1664525u + 1013904223u; return (float) (seed >> 8) / 16777216.0f; }
+    static constexpr int numPlayers = 4;
     float sr = 48000.0f, shift = 0;
-    int horn = 0, cur = 0;
-    SaxPlayer notes[2][3];
-    Biquad tone, sub;
+    int horn = 0, cur = -1, layer = 1;
+    SaxPlayer players[numPlayers];
+    Biquad tone;
+    float lastFc = -1, drift = 0, driftTarget = 0;
+    int fcCount = 0, driftCount = 0;
+    uint32_t seed = 22222u;
 };
 } // namespace ndsp

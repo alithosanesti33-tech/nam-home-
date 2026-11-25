@@ -239,7 +239,15 @@ std::vector<Block::StartingPoint> SaxBlock::startingPoints() const
 }
 
 juce::String SaxBlock::getTitle() const { return params[sModel]->text() + " sax"; }
-juce::String SaxBlock::getSubtitle() const { return params[sCharacter]->text(); }
+juce::String SaxBlock::getSubtitle() const
+{
+    // recorded horns: say so plainly when the recordings aren't there, instead of quietly playing a synth
+    static const int hornFor[4] = { 1, 0, 0, 0 };
+    auto& bank = ndsp::SaxSampleBank::get();
+    if ((int) params[sSound]->get() == 0 && ! bank.has (hornFor[juce::jlimit (0, 3, (int) params[sModel]->get())]))
+        return bank.isReady() || bank.status() != "loading" ? "Recordings missing: run ~/namupdate.sh" : "Loading recordings...";
+    return params[sCharacter]->text();
+}
 
 void SaxBlock::setModel (int m)
 {
@@ -264,7 +272,7 @@ void SaxBlock::reset()
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
     breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
-    noteVel = 0.7f; lastPitch = outPitch = 60.0f;
+    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0;
 }
 
 void SaxBlock::process (float* L, float* R, int n)
@@ -313,7 +321,9 @@ void SaxBlock::process (float* L, float* R, int n)
     auto& bank = ndsp::SaxSampleBank::get();
     static const int hornFor[4] = { 1, 0, 0, 0 };
     static const float shiftFor[4] = { 0.0f, 0.0f, 5.0f, 10.0f };
-    const bool recorded = (int) p (sSound) == 0 && bank.has (hornFor[model]);
+    // "Recorded" never falls back to the modeled horn: no recordings = silence (and the tile says why)
+    const bool recorded = (int) p (sSound) == 0;
+    const bool haveRecordings = bank.has (hornFor[model]);
     sampler.setHorn (hornFor[model], shiftFor[model]);
     const float growl = p (sGrowl) * 0.01f;
     {
@@ -333,6 +343,15 @@ void SaxBlock::process (float* L, float* R, int n)
         return f;
     };
 
+    // how hard a note is played, from the pick (same curve as the breath below)
+    auto breathFor = [&] (float vel, float lvl)
+    {
+        float x = std::max (sus * vel + (1.0f - sus) * lvl, lvl);
+        x = dyn * x + (1.0f - dyn) * 0.72f;
+        return 0.15f + 0.85f * std::pow (juce::jlimit (0.0f, 1.0f, x), 0.8f);
+    };
+    const float bendSmC = coef (0.012f);
+
     float lastHz = 0;
     for (int i = 0; i < n; ++i)
     {
@@ -342,7 +361,10 @@ void SaxBlock::process (float* L, float* R, int n)
 
         // where the guitar is: note centre plus as much of your own vibrato/bends as you want
         const float centre = snap ? std::round (f.centre) : f.centre;
-        const float played = centre + follow * (f.midi - f.centre) + octave;
+        // the tracker's tiny pitch flutter is smoothed away (it is what made the horn warble like a synth);
+        // your real vibrato and bends are slow enough to pass straight through
+        bendSm += bendSmC * ((f.midi - f.centre) - bendSm);
+        const float played = centre + follow * bendSm + octave;
 
         if (f.attack || (f.repick && sounding))
         {
@@ -363,7 +385,8 @@ void SaxBlock::process (float* L, float* R, int n)
                 const float target = played + fold;
                 if (fresh) { scoopOff = -scoopSemis * (0.6f + 0.4f * noteVel); glideOff = 0; breath = 0.0f; }
                 else if (std::abs (target - lastPitch) > 0.5f) { glideOff = 0; scoopOff = -scoopSemis * 0.4f; voice.keyClick (0.6f); }
-                sampler.noteStart (target, fresh ? 0 : (tongueOn ? 2 : 1));
+                sampler.noteStart (target, fresh ? 0 : (tongueOn ? 2 : 1), breathFor (noteVel, f.level));
+                samplerNote = target;
                 bite = atk * (0.15f + 0.25f * noteVel);
                 sounding = true; releasing = false; fallOff = 0; fallTarget = 0;
                 noteTime = 0;
@@ -379,7 +402,8 @@ void SaxBlock::process (float* L, float* R, int n)
             fold = newFold;
             voice.keyClick (0.8f);
             dipEnv = 0.18f;
-            sampler.noteStart (target, 1);
+            sampler.noteStart (target, 1, breath);
+            samplerNote = target;
             noteTime = 0;
         }
         if (f.released && sounding)
@@ -429,14 +453,17 @@ void SaxBlock::process (float* L, float* R, int n)
         float y;
         if (recorded)
         {
-            float r = sampler.tick (pitch, blow * ampVib);
+            float r = haveRecordings ? sampler.tick (pitch - samplerNote, blow * ampVib) : 0.0f;
             if (growl > 0.001f)
             {
-                growlPh += 33.0f * dtS; if (growlPh >= 1.0f) growlPh -= 1.0f;
-                r *= 1.0f + growl * 0.5f * std::sin (6.2831853f * growlPh) * blow;
-                r = std::tanh (r * (1.0f + growl * 4.0f)) / (1.0f + growl * 1.5f);
+                // growl: a hummed, uneven throat buzz (wandering rate and depth), not a steady tremolo
+                growlRnd += 0.002f * ((growlNoise() * 0.5f + 0.5f) - growlRnd);
+                growlPh += (27.0f + 14.0f * growlRnd) * dtS; if (growlPh >= 1.0f) growlPh -= 1.0f;
+                const float buzz = std::sin (6.2831853f * growlPh) * (0.6f + 0.4f * growlRnd) + 0.25f * growlNoise();
+                r *= 1.0f + growl * 0.45f * buzz * blow;
+                r = std::tanh (r * (1.0f + growl * 3.0f)) / (1.0f + growl * 1.2f);
             }
-            y = recSub.process (recBright.process (r)) * volume * (blow > 0.0f || sampler.sounding() ? 1.0f : 0.0f) + voice.tick (pitch, 0.0f) * volume;
+            y = recSub.process (recBright.process (r)) * volume;
         }
         else y = (blow > 0.0005f || sounding) ? voice.tick (pitch, blow * ampVib) * volume : voice.tick (pitch, 0.0f) * volume;
         L[i] = y + inL * dry;
