@@ -441,19 +441,42 @@ void ChainView::itemDragExit (const SourceDetails&)
     repaint();
 }
 
+void ChainView::loadIntoSlot (int s, const File& f)
+{
+    if (s < 0) return;
+    if (! kindFitsSlot (nullptr, f, s))
+    {
+        editor.showError (s == CabSlot ? "The Cab slot takes .wav IRs." : "This slot takes .nam captures.");
+        return;
+    }
+    if (s == CabSlot) { editor.loadItem (f, -1); return; }
+    const auto err = s == PedalSlot ? editor.proc.loadPedal (f) : editor.proc.loadAmp (f);
+    if (err.isNotEmpty()) editor.showError (err);
+    editor.select (s);
+}
+
 void ChainView::itemDropped (const SourceDetails& d)
 {
     const int s = slotAt (d.localPosition);
     hover = -1;
-    const File f (d.description.toString());
-    if (s >= 0 && kindFitsSlot (editor.proc.library.findByPath (f.getFullPathName()), f, s))
+    loadIntoSlot (s, File (d.description.toString()));
+    editor.refreshAll();
+}
+
+void ChainView::filesDropped (const StringArray& files, int x, int y)
+{
+    // Dropped straight from Finder onto a tile: add to the library, then load it into that tile.
+    const int s = slotAt ({ x, y });
+    hover = -1;
+    for (auto& path : files)
     {
-        if (s == CabSlot) editor.loadItem (f, -1);
-        else if (s == PedalSlot) { const auto err = editor.proc.loadPedal (f); if (err.isNotEmpty()) editor.showError (err); editor.select (s); }
-        else { const auto err = editor.proc.loadAmp (f); if (err.isNotEmpty()) editor.showError (err); editor.select (s); }
+        const File f (path);
+        if (f.hasFileExtension ("zip")) { editor.proc.library.importFiles ({ f }); continue; }
+        editor.proc.library.importFiles ({ f });
+        auto inLib = editor.proc.library.getFolder().getChildFile (f.getFileName());
+        loadIntoSlot (s, inLib.existsAsFile() ? inLib : f);
+        break;
     }
-    else if (s >= 0)
-        editor.showError (s == CabSlot ? "Cab slots take .wav IRs." : "This slot takes .nam captures.");
     editor.refreshAll();
 }
 
@@ -824,6 +847,7 @@ void NAMHomeEditor::refreshAll()
 
 void NAMHomeEditor::showError (const String& s)
 {
+    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "NAM Home", s);
     errorText = s;
     errorTicks = 120; // ~6 seconds
     repaint();

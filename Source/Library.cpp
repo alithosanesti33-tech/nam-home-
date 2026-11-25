@@ -218,7 +218,8 @@ LibraryItem Library::readItem (const juce::File& f) const
         it.gearModel = get ("gear_model");
         it.gearType  = get ("gear_type");
         it.toneType  = get ("tone_type");
-        it.kind = it.gearType.startsWithIgnoreCase ("pedal") ? LibraryItem::Kind::Pedal : LibraryItem::Kind::Amp;
+        // "pedal" alone is a pedal; "pedal_amp", "amp_cab" etc. include an amp, so they go in the amp slot
+        it.kind = it.gearType.equalsIgnoreCase ("pedal") ? LibraryItem::Kind::Pedal : LibraryItem::Kind::Amp;
     }
 
     if (entry.isObject())

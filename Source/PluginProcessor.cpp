@@ -52,7 +52,11 @@ juce::String NamSlot::load (const juce::File& f, double sampleRate, int maxBlock
     {
         next = nam::get_dsp (std::filesystem::path (f.getFullPathName().toStdString()));
     }
-    catch (const std::exception& e) { return "Couldn't load this capture: " + juce::String (e.what()); }
+    catch (const std::exception& e)
+    {
+        return "Couldn't load " + f.getFileName() + ".\n\nNAM said: " + juce::String (e.what())
+             + "\n\nIf this is an adjustable (parametric) model from a different player, NAM Home can't read that format yet.";
+    }
     catch (...) { return "Couldn't load this capture."; }
     if (next == nullptr) return "Couldn't load this capture.";
 

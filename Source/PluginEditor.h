@@ -84,7 +84,7 @@ private:
 
 //==============================================================================
 // The chain row: IN -> pedal -> amp -> cab -> OUT. (Stage 2 turns this into the full grid.)
-class ChainView : public juce::Component, public juce::DragAndDropTarget
+class ChainView : public juce::Component, public juce::DragAndDropTarget, public juce::FileDragAndDropTarget
 {
 public:
     enum Slot { PedalSlot = 0, AmpSlot = 1, CabSlot = 2 };
@@ -96,6 +96,12 @@ public:
     void itemDragEnter (const SourceDetails&) override;
     void itemDragExit (const SourceDetails&) override;
     void itemDropped (const SourceDetails&) override;
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void fileDragEnter (const juce::StringArray&, int x, int y) override { hover = slotAt ({ x, y }); repaint(); }
+    void fileDragMove (const juce::StringArray&, int x, int y) override { hover = slotAt ({ x, y }); repaint(); }
+    void fileDragExit (const juce::StringArray&) override { hover = -1; repaint(); }
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+    void loadIntoSlot (int slot, const juce::File& f);
     int selected = AmpSlot;
 private:
     juce::Rectangle<float> tileBounds (int slot) const;
