@@ -33,26 +33,31 @@ target_sources(NAMHome PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/Library.cpp
-    ${NAM_SOURCES}
 )
 
-target_include_directories(NAMHome PRIVATE
-    Source
+# NAM core as an object library linked straight into the app, so model types that
+# register themselves (A2 "SlimmableContainer") are never dropped by the linker.
+add_library(NAMCore OBJECT ${NAM_SOURCES})
+target_include_directories(NAMCore PUBLIC
     ${NAM_CORE_PATH}
     ${NAM_CORE_PATH}/NAM
     ${NAM_CORE_PATH}/Dependencies/eigen
     ${NAM_CORE_PATH}/Dependencies/nlohmann
 )
+target_compile_definitions(NAMCore PUBLIC NAM_SAMPLE_FLOAT NAM_ENABLE_A2_FAST)
+target_compile_options(NAMCore PRIVATE -O3)
+target_sources(NAMHome_Standalone PRIVATE $<TARGET_OBJECTS:NAMCore>)
+
+target_include_directories(NAMHome PRIVATE Source)
 
 target_compile_definitions(NAMHome PUBLIC
-    NAM_SAMPLE_FLOAT
-    NAM_ENABLE_A2_FAST
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
 )
 
 target_link_libraries(NAMHome PRIVATE
+    NAMCore
     juce::juce_audio_utils
     juce::juce_dsp
     PUBLIC juce::juce_recommended_config_flags
