@@ -91,6 +91,7 @@ void SceneBar::showMenu (int i)
     for (int k = 0; k < Engine::numScenes; ++k)
         if (k != i) copyTo.addItem (100 + k, e.sceneLabel (k));
     m.addSubMenu ("Copy this scene to", copyTo);
+    m.addItem (30, "Copy this scene into a new rig (as scene A)");
     m.addSeparator();
     const auto midi = e.describeMapping (Engine::sceneMidiId, i);
     m.addItem (2, midi.isEmpty() ? "MIDI learn a footswitch for this scene" : "MIDI learn again (now " + midi + ")");
@@ -111,6 +112,7 @@ void SceneBar::showMenu (int i)
     {
         auto& en = proc.engine;
         auto say = [this] (const juce::String& t) { if (proc.onNotice) proc.onNotice (t); };
+        if (r == 30 && onSceneToNewRig) { onSceneToNewRig (i); return; }
         if (r == 20) say (proc.matchScenesToA());
         if (r == 21) say (proc.matchPresetLevel());
         if (r == 22)

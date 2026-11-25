@@ -21,6 +21,7 @@ void Engine::prepare (double sr, int mb)
         for (auto& b : row)
             if (b != nullptr) b->prepareBlock (sr, maxBlock);
     clickSamples = (int) (0.025 * sr);
+    resetLimiter (sr);
     for (auto& s : shifter) s.prepare ((float) sr);
 }
 
@@ -195,6 +196,33 @@ void Engine::removeFromRow (int r, int c, bool closeGap)
     if (closeGap)
         for (int k = c; k < cols - 1; ++k) { row[(size_t) k] = row[(size_t) (k + 1)]; row[(size_t) (k + 1)] = nullptr; }
     publish();
+}
+
+void Engine::sceneToNewRig (int s)
+{
+    s = juce::jlimit (0, numScenes - 1, s);
+    selectScene (s);                         // the blocks now sound like scene s
+    SceneState keep;
+    captureScene (keep);
+    keep.name = scenes[(size_t) s].name;
+    keep.trimDb = scenes[(size_t) s].trimDb;
+    for (auto& sc : scenes) sc = {};
+    scenes[0] = keep;
+    currentScene = 0;
+    pendingScene = -1;
+    for (int m = 0; m <= presetMeter; ++m) resetLoudness (m);
+    ++sceneVersion;
+}
+
+void Engine::resetLimiter (double sr)
+{
+    limLen = juce::jlimit (8, limMax - 1, (int) std::lround (0.001 * sr));   // 1 ms look-ahead
+    for (int k = 0; k < limMax; ++k) { limL[k] = limR[k] = 0.0f; limMin[k] = 1.0f; }
+    for (auto& q : limReq) q = 1.0f;
+    limPos = limReqPos = 0;
+    limBox = limLen;
+    limRel = 1.0f;
+    limRelCoef = 1.0f - std::exp (-1.0f / (0.06f * (float) sr));
 }
 
 float Engine::measuredLoudness (int meter, int* seconds) const
@@ -677,12 +705,30 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         trimSm += 0.0005f * (trimTarget - trimSm);
         float l = mL[i] * outG * trimSm, r = mR[i] * outG * trimSm;
         if (mono) l = r = 0.5f * (l + r);
-        // safety: transparent below -1 dBFS, rounds off anything hotter instead of hard clipping
-        auto safe = [] (float v) { const float a = std::abs (v); return a < 0.89f ? v : std::copysign (0.89f + 0.11f * fastTanh ((a - 0.89f) / 0.11f), v); };
-        l = safe (l); r = safe (r);
+        // look-ahead limiter: the gain comes down smoothly just before a peak arrives, so nothing clips
+        {
+            constexpr float ceiling = 0.841f;   // -1.5 dBFS
+            const int D = limLen;
+            const float pk = std::max (std::abs (l), std::abs (r));
+            limReq[limReqPos] = pk > ceiling ? ceiling / pk : 1.0f;      // window of D + 1 gains
+            limReqPos = (limReqPos + 1) % (D + 1);
+            float mn = 1.0f;
+            for (int k = 0; k <= D; ++k) mn = std::min (mn, limReq[k]);
+            // average of the last D minimums: always at or below what the delayed sample needs
+            limBox += mn - limMin[limPos];
+            limMin[limPos] = mn;
+            const float outL = limL[limPos], outR = limR[limPos];
+            limL[limPos] = l; limR[limPos] = r;
+            limPos = (limPos + 1) % D;
+            const float g = (float) std::min (1.0, limBox / D);
+            limRel = g < limRel ? g : limRel + (g - limRel) * limRelCoef;   // ~60 ms release
+            l = outL * limRel; r = outR * limRel;
+            l = juce::jlimit (-0.99f, 0.99f, l); r = juce::jlimit (-0.99f, 0.99f, r);   // last guard, never reached
+        }
         mL[i] = l; mR[i] = r;
         pkL = std::max (pkL, std::abs (l)); pkR = std::max (pkR, std::abs (r));
     }
+    limiterReductionDb = -juce::Decibels::gainToDecibels (limRel);
     outputPeakL = std::max (pkL, outputPeakL.load() * 0.9f);
     outputPeakR = std::max (pkR, outputPeakR.load() * 0.9f);
 

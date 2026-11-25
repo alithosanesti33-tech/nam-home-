@@ -291,6 +291,19 @@ void NAMHomeProcessor::buildDefaultRig()
     dirty = false;
 }
 
+juce::String NAMHomeProcessor::sceneToNewRig (int scene)
+{
+    snapshotIfChanged();   // Cmd+Z brings the whole rig back
+    const auto from = currentPreset.isEmpty() ? juce::String ("My rig") : currentPreset;
+    const auto label = engine.sceneLabel (scene);
+    engine.sceneToNewRig (scene);
+    engine.presetTrimDb = 0.0f;
+    currentPreset = {};
+    dirty = true;
+    if (onRigChanged) onRigChanged();
+    return from + " - " + label.replace ("  ", " ");
+}
+
 void NAMHomeProcessor::newRig()
 {
     buildDefaultRig();

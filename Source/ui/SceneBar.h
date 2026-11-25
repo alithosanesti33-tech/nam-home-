@@ -14,6 +14,7 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
     std::function<void()> onChanged;
+    std::function<void (int)> onSceneToNewRig;
     std::function<void (const juce::String&, bool)> onMessage;
 
 private:

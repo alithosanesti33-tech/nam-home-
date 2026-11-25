@@ -226,6 +226,23 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     addAndMakeVisible (sceneBar);
     sceneBar.onChanged = [this] { grid.repaint(); if (drawerOpen) drawer.sync(); };
     sceneBar.onMessage = [this] (const String& s, bool w) { message (s, w); };
+    sceneBar.onSceneToNewRig = [this] (int scene)
+    {
+        auto go = [this, scene]
+        {
+            const auto name = proc.sceneToNewRig (scene);
+            closeDrawer();
+            refreshAll();
+            message ("New rig from that scene, as scene A. Name it to save it (Cmd+Z goes back).");
+            saveAsWithName (name);
+        };
+        if (proc.dirty && proc.currentPreset.isNotEmpty())
+            AlertWindow::showOkCancelBox (MessageBoxIconType::QuestionIcon, "Unsaved changes",
+                "\"" + proc.currentPreset + "\" has changes you haven't saved. Make the new rig anyway? (Cmd+Z brings them back.)",
+                "Make new rig", "Cancel", this, ModalCallbackFunction::create ([go] (int ok) { if (ok != 0) go(); }));
+        else
+            go();
+    };
 
     drawer.onClose = [this] { closeDrawer(); };
     drawerHeight = proc.settings().getIntValue ("drawerH", 340);
@@ -617,10 +634,13 @@ void NAMHomeEditor::showPresetMenu()
     });
 }
 
-void NAMHomeEditor::saveAs (bool rename)
+void NAMHomeEditor::saveAs (bool rename) { saveAsImpl (rename, {}); }
+void NAMHomeEditor::saveAsWithName (const String& suggested) { saveAsImpl (false, suggested); }
+
+void NAMHomeEditor::saveAsImpl (bool rename, const String& suggested)
 {
     auto* aw = new AlertWindow (rename ? "Rename preset" : "Save preset", "Name", MessageBoxIconType::NoIcon);
-    aw->addTextEditor ("name", rename ? proc.currentPreset : (proc.currentPreset.isEmpty() ? String ("My rig") : proc.currentPreset + " copy"));
+    aw->addTextEditor ("name", suggested.isNotEmpty() ? suggested : rename ? proc.currentPreset : (proc.currentPreset.isEmpty() ? String ("My rig") : proc.currentPreset + " copy"));
     aw->addButton (rename ? "Rename" : "Save", 1, KeyPress (KeyPress::returnKey));
     aw->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
     aw->enterModalState (true, ModalCallbackFunction::create ([this, aw, rename] (int r)

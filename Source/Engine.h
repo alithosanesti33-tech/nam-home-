@@ -66,6 +66,7 @@ public:
     float measuredLoudness (int meter, int* seconds = nullptr) const;   // < -90 when there isn't enough playing yet
     void resetLoudness (int meter);
     bool sceneIsUsed (int s) const;   // has been visited / set up
+    void sceneToNewRig (int s);       // this rig becomes just scene s, as scene A (the other scenes are cleared)
     float sceneTrim (int s) const;
     void setSceneTrim (int s, float db);
     // spillover: delay / reverb / freeze tails keep ringing for a few seconds after a preset change
@@ -186,6 +187,16 @@ private:
     float trimSm = 1.0f;
     ndsp::Biquad eqF[2][7];
     ndsp::Biquad kw[2][2];          // K-weighting for the loudness meter
+    // output limiter: 1 ms look-ahead, ceiling -1.5 dBFS, so the output never clips or goes into the red
+    static constexpr int limMax = 256;
+    float limL[limMax] {}, limR[limMax] {}, limReq[limMax + 1] {}, limMin[limMax] {};
+    int limPos = 0, limReqPos = 0, limLen = 48;
+    double limBox = 48.0;
+    float limRel = 1.0f, limRelCoef = 0.0003f;
+    void resetLimiter (double sr);
+public:
+    std::atomic<float> limiterReductionDb { 0.0f };   // for the meter
+private:
     float kwRate = 0;
     double subE[4] {};              // last four 100 ms energies (one 400 ms block)
     double subAcc = 0; int subN = 0, subCount = 0, loudScene = -1, loudSkip = 0;

@@ -85,6 +85,8 @@ private:
     void closeDrawer();
     void showPresetMenu();
     void saveAs (bool rename);
+    void saveAsWithName (const juce::String& suggested);
+    void saveAsImpl (bool rename, const juce::String& suggested);
     void stepPreset (int delta);
     void refreshAll();
     void loadFromLibrary (const juce::File& f);
