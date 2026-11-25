@@ -1,0 +1,32 @@
+name: Fetch drum kits
+# Recorded acoustic drum kits from the Hydrogen drum machine project (GPL), turned into one file
+# per drum and velocity for NAM Home's drum machine. Published as a download for ~/namupdate.sh.
+on:
+  workflow_dispatch:
+  push:
+    paths: [ "scripts/make_drumkits.py", ".github/workflows/drums.yml" ]
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Hydrogen kits
+        run: |
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/hydrogen-music/hydrogen.git hydrogen
+          cd hydrogen && git sparse-checkout set data/drumkits && cd ..
+          ls hydrogen/data/drumkits
+      - name: Convert
+        run: |
+          pip install numpy soundfile
+          python3 scripts/make_drumkits.py hydrogen/data/drumkits out
+          ls -R out | head -80
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out && echo "v1" > .version && zip -qr ../NAM-Home-Drums.zip . && cd ..
+          ls -la NAM-Home-Drums.zip
+          gh release view drum-kits >/dev/null 2>&1 || gh release create drum-kits --title "Drum kits" --notes "Recorded drum kits from the Hydrogen drum machine project (GPL), one file per drum and velocity. Installed by ~/namupdate.sh into your NAM Home folder (Drums/Kits)."
+          gh release upload drum-kits NAM-Home-Drums.zip --clobber

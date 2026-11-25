@@ -29,8 +29,10 @@ fi
 LIBFILE="$HOME/Library/Application Support/NAM Home/library-path.txt"
 if [ -f "$LIBFILE" ]; then NH="$(cat "$LIBFILE")"; else NH="$HOME/Music/NAM Home"; fi
 SAX="$NH/Instruments/Sax"
+# never create the folder on your Mac's own disk when the SSD isn't plugged in
+nh_ready() { [ -d "$NH" ] || { case "$NH" in /Volumes/*) [ -d "$(echo "$NH" | cut -d/ -f1-3)" ] && mkdir -p "$NH" 2>/dev/null ;; *) mkdir -p "$NH" 2>/dev/null ;; esac; }; }
 if [ "$(cat "$SAX/.version" 2>/dev/null)" != "v1" ]; then
-  if [ -d "$NH" ] || mkdir -p "$NH" 2>/dev/null; then
+  if nh_ready; then
     echo "Downloading the sax recordings into $SAX ..."
     if curl -fL --progress-bar "https://github.com/alithosanesti33-tech/nam-home-/releases/download/sax-recordings/NAM-Home-Sax.zip" -o "$TMP/sax.zip"; then
       rm -rf "$SAX"; mkdir -p "$SAX"
@@ -40,6 +42,21 @@ if [ "$(cat "$SAX/.version" 2>/dev/null)" != "v1" ]; then
   else
     echo "Couldn't reach $NH (is the SSD plugged in?). Sax recordings skipped; run this again with it connected."
   fi
+fi
+# Recorded drum kits for the drum machine (Drums/Kits), plus folders for your loops and drum loops
+KITS="$NH/Drums/Kits"
+if nh_ready; then
+  mkdir -p "$NH/Loops" "$NH/Drums/Loops" "$NH/Setlists"
+  if [ "$(cat "$KITS/.version" 2>/dev/null)" != "v1" ]; then
+    echo "Downloading the drum kits into $KITS ..."
+    if curl -fL --progress-bar "https://github.com/alithosanesti33-tech/nam-home-/releases/download/drum-kits/NAM-Home-Drums.zip" -o "$TMP/drums.zip"; then
+      rm -rf "$KITS"; mkdir -p "$KITS"
+      ditto -x -k "$TMP/drums.zip" "$KITS/"
+      echo "Drum kits installed. Put your own drum loops (WAV) in $NH/Drums/Loops"
+    fi
+  fi
+else
+  echo "Couldn't reach $NH (is the SSD plugged in?). Drum kits skipped; run this again with it connected."
 fi
 rm -rf "$TMP"
 # make Finder and the Dock show the current icon instead of a cached one
