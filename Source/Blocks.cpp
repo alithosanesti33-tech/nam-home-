@@ -52,6 +52,7 @@ Param& Block::addFloat (const juce::String& pid, const juce::String& name, float
     if (centre > lo && centre < hi) prm->range.setSkewForCentre (centre);
     prm->def = def;
     prm->value = def;
+    prm->group = currentGroup;
     params.push_back (std::move (prm));
     return *params.back();
 }
@@ -62,6 +63,7 @@ Param& Block::addChoice (const juce::String& pid, const juce::String& name, cons
     prm->id = pid; prm->name = name; prm->kind = Param::Kind::Choice; prm->choices = choices;
     prm->range = juce::NormalisableRange<float> (0.0f, (float) juce::jmax (1, choices.size() - 1), 1.0f);
     prm->def = (float) def; prm->value = (float) def;
+    prm->group = currentGroup;
     params.push_back (std::move (prm));
     return *params.back();
 }
@@ -72,6 +74,7 @@ Param& Block::addToggle (const juce::String& pid, const juce::String& name, bool
     prm->id = pid; prm->name = name; prm->kind = Param::Kind::Toggle;
     prm->range = juce::NormalisableRange<float> (0.0f, 1.0f, 1.0f);
     prm->def = def ? 1.0f : 0.0f; prm->value = prm->def;
+    prm->group = currentGroup;
     params.push_back (std::move (prm));
     if (pid == "trails") trailsParam = params.back().get();
     return *params.back();
@@ -181,6 +184,7 @@ juce::String Block::typeName (Type t)
         case Type::Modulation:   return "Modulation";
         case Type::TriChorus:    return "Tri-Chorus";
         case Type::Utility:      return "Utility";
+        case Type::PhatTrack:    return "PhatTrack";
         case Type::NumTypes:     break;
     }
     return {};
@@ -195,6 +199,7 @@ juce::String Block::categoryName (Type t)
         case Type::Cab: return "Cabs";
         case Type::GraphicEQ: case Type::ParametricEQ: return "EQ";
         case Type::Gate: case Type::Utility: return "Utility";
+        case Type::PhatTrack: return "Synthesizers";
         default: return "Effects";
     }
 }
@@ -211,6 +216,7 @@ juce::Colour Block::colour (Type t)
                                  return juce::Colour (0xff5dbb63);
         case Type::Gate: case Type::Utility:
                                  return juce::Colour (0xff8a8f98);
+        case Type::PhatTrack:    return juce::Colour (0xffff7a59);
         default:                 return juce::Colour (0xffe26ba8);
     }
 }
@@ -234,6 +240,7 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Modulation:   return std::make_unique<ModulationBlock>();
         case Type::TriChorus:    return std::make_unique<TriChorusBlock>();
         case Type::Utility:      return std::make_unique<UtilityBlock>();
+        case Type::PhatTrack:    return std::make_unique<PhatTrackBlock>();
         case Type::NumTypes:     break;
     }
     return nullptr;

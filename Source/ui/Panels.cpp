@@ -3,7 +3,7 @@
 
 using namespace juce;
 
-static const char* chipNames[] = { "All", "Adjustable amps", "NAM captures", "Pedals", "Cabs / IRs", "Effects" };
+static const char* chipNames[] = { "All", "Adjustable amps", "NAM captures", "Pedals", "Cabs / IRs", "Effects", "Synthesizers" };
 
 //==============================================================================
 LibraryPanel::LibraryPanel (NAMHomeProcessor& p) : proc (p)
@@ -14,7 +14,7 @@ LibraryPanel::LibraryPanel (NAMHomeProcessor& p) : proc (p)
     search.onTextChange = [this] { refresh(); };
     addAndMakeVisible (search);
 
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)
     {
         auto* b = chips.add (new TextButton (chipNames[i]));
         b->setClickingTogglesState (true);
@@ -72,22 +72,22 @@ void LibraryPanel::refresh()
     if (all || filter == 2) addItems ("NAM amp captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && ! i.adjustable; });
     if (all || filter == 2 || filter == 3) addItems ("NAM pedal captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Pedal; });
     if (all || filter == 4) addItems ("Cabinet IRs", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::IR; });
-    if (all || filter == 3 || filter == 5)
+    auto addBuiltIns = [&] (const String& label, std::function<bool (Block::Type)> pred)
     {
         std::vector<Entry> fx;
         for (auto t : Block::allTypes())
         {
-            if (t == Block::Type::NamAmp || t == Block::Type::NamPedal || t == Block::Type::Cab) continue;
-            if (filter == 3 && Block::categoryName (t) != "Pedals") continue;
+            if (t == Block::Type::NamAmp || t == Block::Type::NamPedal || t == Block::Type::Cab || ! pred (t)) continue;
             if (! matches (Block::typeName (t) + " " + Block::categoryName (t))) continue;
             Entry e; e.type = t; e.label = Block::typeName (t); fx.push_back (e);
         }
-        if (! fx.empty())
-        {
-            addSection (filter == 3 ? String ("Built-in pedals") : String ("Built-in effects"));
-            shown.insert (shown.end(), fx.begin(), fx.end());
-        }
-    }
+        if (fx.empty()) return;
+        addSection (label);
+        shown.insert (shown.end(), fx.begin(), fx.end());
+    };
+    if (filter == 3) addBuiltIns ("Built-in pedals", [] (Block::Type t) { return Block::categoryName (t) == "Pedals"; });
+    if (all || filter == 6) addBuiltIns ("Synthesizers", [] (Block::Type t) { return Block::categoryName (t) == "Synthesizers"; });
+    if (all || filter == 5) addBuiltIns ("Built-in effects", [] (Block::Type t) { return Block::categoryName (t) != "Synthesizers"; });
     list.updateContent();
     list.repaint();
     repaint();
@@ -185,7 +185,9 @@ void LibraryPanel::paintListBoxItem (int row, Graphics& g, int w, int h, bool se
         g.drawText (e.label, 34, 5, w - 60, 19, Justification::centredLeft);
         g.setColour (theme::muted);
         g.setFont (theme::font (12.0f));
-        g.drawText ("Built-in " + Block::categoryName (e.type).toLowerCase().trimCharactersAtEnd ("s") + ", every control adjustable", 34, 24, w - 60, 17, Justification::centredLeft);
+        const auto sub = Block::categoryName (e.type) == "Synthesizers" ? String ("Guitar-to-synth, played by your guitar")
+                                                                        : "Built-in " + Block::categoryName (e.type).toLowerCase().trimCharactersAtEnd ("s") + ", every control adjustable";
+        g.drawText (sub, 34, 24, w - 60, 17, Justification::centredLeft);
     }
 }
 

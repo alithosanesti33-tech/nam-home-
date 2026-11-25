@@ -26,6 +26,18 @@ protected:
     juce::OwnedArray<ParamSwitch> switches;
     bool skipParam (int i) const;
     int firstParam = 0, lastParam = -1;       // range handled by the generic layout
+
+    // blocks with many controls (synths) are laid out in titled sections that scroll sideways
+    struct GroupContent : public juce::Component
+    {
+        juce::Array<std::pair<juce::String, juce::Rectangle<int>>> sections;
+        juce::Colour colour;
+        void paint (juce::Graphics&) override;
+    };
+    bool grouped = false;
+    juce::Viewport viewport;
+    GroupContent content;
+    void layoutGrouped (juce::Rectangle<int> r);
 };
 
 class NamEditor : public BlockEditor

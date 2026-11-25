@@ -328,7 +328,7 @@ void GridView::mouseDoubleClick (const MouseEvent& e)
 void GridView::showAddMenu (Point<int> cell)
 {
     PopupMenu m;
-    StringArray cats { "Amps", "Pedals", "Cabs", "EQ", "Effects", "Utility" };
+    StringArray cats { "Amps", "Pedals", "Cabs", "EQ", "Effects", "Synthesizers", "Utility" };
     std::map<String, PopupMenu> subs;
     for (auto t : Block::allTypes())
     {

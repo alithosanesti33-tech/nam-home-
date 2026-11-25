@@ -17,6 +17,7 @@ struct Param
     std::atomic<float> value { 0 };
     std::function<bool (const Block&)> visible;   // hidden for types where it does nothing
     bool realControl = true;                      // false = "added shaping" around a capture (drawn grey)
+    juce::String group;                           // editor section (blocks with many controls)
 
     float get() const { return value.load(); }
     int getInt() const { return (int) std::lround (value.load()); }
@@ -39,7 +40,7 @@ public:
     enum class Type
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
-        GraphicEQ, ParametricEQ, Delay, Reverb, Modulation, TriChorus, Utility, NumTypes
+        GraphicEQ, ParametricEQ, Delay, Reverb, Modulation, TriChorus, Utility, PhatTrack, NumTypes
     };
 
     explicit Block (Type t);
@@ -84,6 +85,7 @@ protected:
     Param& addChoice (const juce::String& pid, const juce::String& name, const juce::StringArray& choices, int def);
     Param& addToggle (const juce::String& pid, const juce::String& name, bool def);
     float p (int index) const { return params[(size_t) index]->value.load(); }
+    juce::String currentGroup;   // params added while set get this group
 
     Type type;
     float sampleRate = 48000.0f;

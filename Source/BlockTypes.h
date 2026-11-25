@@ -1,5 +1,6 @@
 #pragma once
 #include "Blocks.h"
+#include "phat/PhatCore.h"
 
 namespace nam { class DSP; }
 
@@ -303,4 +304,27 @@ private:
     ndsp::Biquad lp[3], inLp;
     ndsp::LFO lfo;
     float fbState = 0;
+};
+
+//==============================================================================
+// PhatTrack: guitar-to-synth (pitch tracker + Little-Phatty-style mono voice), ported from the PhatTrack plugin.
+class PhatTrackBlock : public Block
+{
+public:
+    PhatTrackBlock();
+    std::atomic<float> detectedHz { 0 }, gateOpen { 0 };
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    phat::PitchTracker tracker;
+    phat::GateTrigger gateTrigger;
+    phat::Voice voice;
+    double rate = 48000.0;
+    float rawMidi = 60, slowMidi = 60, smoothMidi = 60, glideMidi = 60, lastHz = 0;
+    bool haveRaw = false, pitchReady = false;
+    int samplesSinceResult = 1000000, jumpCooldown = 0;
+    float validGain = 0, dryGate = 0;
+    float smoothCoefSlow = 0.01f, smoothCoefFast = 0.1f, slowFollowCoef = 0.01f, validCoef = 0.05f, dryAtk = 0.01f, dryRel = 0.001f;
 };

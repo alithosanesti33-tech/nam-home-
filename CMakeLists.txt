@@ -43,6 +43,7 @@ target_sources(NAMHome PRIVATE
     Source/Library.cpp
     Source/Blocks.cpp
     Source/Effects.cpp
+    Source/Instruments.cpp
     Source/NamBlocks.cpp
     Source/Engine.cpp
     Source/Tone3000.cpp

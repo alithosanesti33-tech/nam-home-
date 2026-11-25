@@ -21,6 +21,17 @@ void BlockEditor::rebuild()
     auto& b = *block;
     const auto col = b.getColour();
     auto changed = [this] { resized(); repaint(); };
+    grouped = false;
+    for (auto& prm : b.params) if (prm->group.isNotEmpty()) grouped = true;
+    Component* parent = grouped ? static_cast<Component*> (&content) : static_cast<Component*> (this);
+    if (grouped)
+    {
+        content.colour = col;
+        viewport.setViewedComponent (&content, false);
+        viewport.setScrollBarsShown (false, true);
+        viewport.setScrollBarThickness (8);
+        addAndMakeVisible (viewport);
+    }
 
     for (int i = 0; i < (int) b.params.size(); ++i)
     {
@@ -37,20 +48,20 @@ void BlockEditor::rebuild()
             auto* c = combos.add (new ParamCombo (proc, b, i));
             c->onChange = changed;
             c->getProperties().set ("index", i);
-            addAndMakeVisible (c);
+            parent->addAndMakeVisible (c);
         }
         else if (prm.kind == Param::Kind::Toggle)
         {
             auto* s = switches.add (new ParamSwitch (proc, b, i));
             s->onChange = changed;
             s->getProperties().set ("index", i);
-            addAndMakeVisible (s);
+            parent->addAndMakeVisible (s);
         }
         else
         {
             auto* k = knobs.add (new ParamKnob (proc, b, i, prm.realControl ? col : theme::shaping));
             k->getProperties().set ("index", i);
-            addAndMakeVisible (k);
+            parent->addAndMakeVisible (k);
         }
     }
 }
@@ -75,6 +86,7 @@ void BlockEditor::resized()
         r.removeFromTop (14);
     }
     r = layoutSpecial (r);
+    if (grouped) { layoutGrouped (r); return; }
 
     // right column: choices and switches
     int nRight = 0;
@@ -111,6 +123,47 @@ void BlockEditor::resized()
     const int perRow = jmax (1, r.getWidth() / kw);
     for (int i = 0; i < vk.size(); ++i)
         vk[i]->setBounds (r.getX() + (i % perRow) * kw, r.getY() + (i / perRow) * kh, kw - 6, kh - 4);
+}
+
+void BlockEditor::layoutGrouped (Rectangle<int> r)
+{
+    viewport.setBounds (r);
+    const int h = r.getHeight() - 12;
+    StringArray order;
+    for (auto& prm : block->params) if (prm->group.isNotEmpty()) order.addIfNotAlreadyThere (prm->group);
+    content.sections.clear();
+    int x = 0;
+    const int kw = 66, kh = 86;
+    for (auto& g : order)
+    {
+        Array<Component*> ks, cs, ss;
+        for (auto* k : knobs) if (block->params[(size_t) (int) k->getProperties()["index"]]->group == g) ks.add (k);
+        for (auto* c : combos) if (block->params[(size_t) (int) c->getProperties()["index"]]->group == g) cs.add (c);
+        for (auto* s : switches) if (block->params[(size_t) (int) s->getProperties()["index"]]->group == g) ss.add (s);
+        const int cols = ks.size() > 2 ? 2 : jmax (1, ks.size());
+        const int width = jmax (cols * kw, cs.isEmpty() && ss.isEmpty() ? 0 : 150) + 20;
+        auto sec = Rectangle<int> (x, 0, width, h);
+        content.sections.add ({ g, sec });
+        auto inner = sec.reduced (10, 0).withTrimmedTop (26).withTrimmedBottom (8);
+        for (auto* c : cs) { c->setBounds (inner.removeFromTop (50)); inner.removeFromTop (2); }
+        for (auto* s : ss) { s->setBounds (inner.removeFromTop (28).withWidth (jmax (150, inner.getWidth()))); inner.removeFromTop (2); }
+        for (int i = 0; i < ks.size(); ++i)
+            ks[i]->setBounds (inner.getX() + (i % cols) * kw, inner.getY() + (i / cols) * kh, kw - 4, kh - 4);
+        x += width + 8;
+    }
+    content.setSize (jmax (x, r.getWidth()), h);
+}
+
+void BlockEditor::GroupContent::paint (Graphics& g)
+{
+    for (auto& s : sections)
+    {
+        g.setColour (theme::card);
+        g.fillRoundedRectangle (s.second.toFloat(), 10.0f);
+        g.setColour (colour);
+        g.setFont (theme::font (11.5f, 2));
+        g.drawText (s.first.toUpperCase(), s.second.withHeight (24).reduced (10, 0), Justification::centredLeft);
+    }
 }
 
 void BlockEditor::sync()
