@@ -73,7 +73,78 @@ void Engine::clearAll()
 {
     for (auto& row : cells) for (auto& b : row) b = nullptr;
     for (auto& m : mappings) m = {};
+    resetScenes();
     publish();
+}
+
+//==============================================================================
+void Engine::captureScene (SceneState& into) const
+{
+    into.blocks.clear();
+    for (auto& row : cells)
+        for (auto& b : row)
+            if (b != nullptr)
+            {
+                std::vector<float> vals;
+                vals.reserve (b->params.size());
+                for (auto& prm : b->params) vals.push_back (prm->get());
+                into.blocks[b->id] = { b->enabled.load(), std::move (vals) };
+            }
+    into.valid = true;
+}
+
+void Engine::applyScene (const SceneState& sc)
+{
+    for (auto& row : cells)
+        for (auto& b : row)
+        {
+            if (b == nullptr) continue;
+            auto it = sc.blocks.find (b->id);
+            if (it == sc.blocks.end()) continue;   // added after this scene was made: leave as it is
+            b->enabled = it->second.first;
+            const auto& vals = it->second.second;
+            for (size_t i = 0; i < b->params.size() && i < vals.size(); ++i)
+                if (b->params[i]->get() != vals[i]) b->params[i]->set (vals[i]);
+        }
+}
+
+void Engine::selectScene (int s)
+{
+    s = juce::jlimit (0, numScenes - 1, s);
+    const int cur = currentScene.load();
+    if (s == cur) return;
+    captureScene (scenes[(size_t) cur]);
+    currentScene = s;
+    if (scenes[(size_t) s].valid) applyScene (scenes[(size_t) s]);
+    else captureScene (scenes[(size_t) s]);   // a new scene starts as a copy of where you are
+    ++sceneVersion;
+}
+
+void Engine::copyScene (int from, int to)
+{
+    if (from == to) return;
+    const int cur = currentScene.load();
+    if (from == cur) captureScene (scenes[(size_t) from]);
+    const auto name = scenes[(size_t) to].name;
+    scenes[(size_t) to] = scenes[(size_t) from];
+    scenes[(size_t) to].name = name;
+    if (to == cur) applyScene (scenes[(size_t) to]);
+    ++sceneVersion;
+}
+
+void Engine::resetScenes()
+{
+    for (auto& sc : scenes) sc = {};
+    currentScene = 0;
+    pendingScene = -1;
+    ++sceneVersion;
+}
+
+juce::String Engine::sceneLabel (int s) const
+{
+    const juce::String letter = juce::String::charToString ((juce::juce_wchar) ('A' + s));
+    const auto& n = scenes[(size_t) juce::jlimit (0, numScenes - 1, s)].name;
+    return n.isEmpty() ? letter : letter + "  " + n;
 }
 
 std::shared_ptr<Block> Engine::findById (int id) const
@@ -175,7 +246,7 @@ void Engine::pollMessageThread()
         {
             const int kind = learnedKind.load(), num = learnedNum.load();
             const int bid = learnBlock.load(), prm = learnParam.load();
-            bool switchTarget = prm < 0 || bid == -1;
+            bool switchTarget = prm < 0 || bid == -1 || bid == sceneMidiId;
             if (! switchTarget)
                 if (auto b = findById (bid))
                     if (prm < (int) b->params.size()) switchTarget = b->params[(size_t) prm]->kind != Param::Kind::Float;
@@ -194,6 +265,8 @@ void Engine::pollMessageThread()
         }
     }
     if (tapFromMidi.exchange (false)) tapTempo();
+    const int ps = pendingScene.exchange (-1);
+    if (ps >= 0) selectScene (ps);
     for (auto& row : cells)
         for (auto& b : row)
             if (auto* cab = dynamic_cast<CabBlock*> (b.get())) cab->updateAlignment();
@@ -202,6 +275,7 @@ void Engine::pollMessageThread()
 void Engine::applyMapping (const Mapping& m, int value, bool press, const Plan& plan)
 {
     if (m.blockId == -1) { if (press) tapFromMidi = true; return; }
+    if (m.blockId == sceneMidiId) { if (press) pendingScene = m.param; return; }
     for (int r = 0; r < rows; ++r)
         for (int c = 0; c < cols; ++c)
         {
@@ -484,6 +558,31 @@ juce::var Engine::toVar() const
             maps.add (juce::var (mo));
         }
     o->setProperty ("midi", maps);
+
+    juce::Array<juce::var> scs;
+    for (int i = 0; i < numScenes; ++i)
+    {
+        SceneState sc = scenes[(size_t) i];
+        if (i == currentScene.load()) captureScene (sc);   // the scene you are on, as it is now
+        auto* so = new juce::DynamicObject();
+        so->setProperty ("valid", sc.valid);
+        so->setProperty ("name", sc.name);
+        juce::Array<juce::var> bl;
+        for (auto& [bid, st] : sc.blocks)
+        {
+            auto* bo = new juce::DynamicObject();
+            bo->setProperty ("id", bid);
+            bo->setProperty ("on", st.first);
+            juce::Array<juce::var> vals;
+            for (float f : st.second) vals.add (f);
+            bo->setProperty ("v", vals);
+            bl.add (juce::var (bo));
+        }
+        so->setProperty ("blocks", bl);
+        scs.add (juce::var (so));
+    }
+    o->setProperty ("scenes", scs);
+    o->setProperty ("scene", currentScene.load());
     return juce::var (o);
 }
 
@@ -542,6 +641,28 @@ void Engine::fromVar (const juce::var& v)
                 mappings[(size_t) k++] = m;
             }
         }
+    }
+    resetScenes();
+    if (auto* arr = v.getProperty ("scenes", {}).getArray())
+    {
+        for (int i = 0; i < numScenes && i < arr->size(); ++i)
+        {
+            const juce::var so = (*arr)[i];
+            auto& sc = scenes[(size_t) i];
+            sc.valid = (bool) so.getProperty ("valid", false);
+            sc.name = so.getProperty ("name", "").toString();
+            if (auto* bl = so.getProperty ("blocks", {}).getArray())
+                for (auto& bo : *bl)
+                {
+                    auto it = idMap.find ((int) bo.getProperty ("id", 0));
+                    if (it == idMap.end()) continue;
+                    std::vector<float> vals;
+                    if (auto* va = bo.getProperty ("v", {}).getArray()) for (auto& f : *va) vals.push_back ((float) f);
+                    sc.blocks[it->second] = { (bool) bo.getProperty ("on", true), std::move (vals) };
+                }
+        }
+        currentScene = juce::jlimit (0, numScenes - 1, (int) v.getProperty ("scene", 0));
+        if (scenes[(size_t) currentScene.load()].valid) applyScene (scenes[(size_t) currentScene.load()]);
     }
     publish();
 }

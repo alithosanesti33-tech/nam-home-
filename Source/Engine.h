@@ -1,5 +1,6 @@
 #pragma once
 #include "BlockTypes.h"
+#include <map>
 
 // The signal chain grid: 4 rows x 10 columns.
 // Row 0 is the main path from IN to OUT. Any other row that holds blocks splits off the
@@ -88,6 +89,24 @@ public:
     std::atomic<bool> tapFromMidi { false };
     void pollMessageThread();                // timer: finishes learn, MIDI taps
 
+    // ---- scenes (like the Quad Cortex): each preset has 8 scenes. A scene remembers every block's
+    // on/off state and every knob, but keeps the same blocks loaded, so switching has no gap.
+    // Edits are remembered in the scene you are on.
+    static constexpr int numScenes = 8;
+    struct SceneState
+    {
+        bool valid = false;
+        juce::String name;
+        std::map<int, std::pair<bool, std::vector<float>>> blocks;   // block id -> (on, knob values)
+    };
+    std::array<SceneState, numScenes> scenes;
+    std::atomic<int> currentScene { 0 }, pendingScene { -1 }, sceneVersion { 0 };
+    void selectScene (int s);                  // message thread (MIDI goes through pendingScene)
+    void copyScene (int from, int to);
+    void resetScenes();
+    juce::String sceneLabel (int s) const;     // "A" or "A  Lead"
+    static constexpr int sceneMidiId = -2;     // MIDI mapping target: blockId -2, param = scene
+
     // ---- save / load
     juce::var toVar() const;
     void fromVar (const juce::var& v);
@@ -100,6 +119,8 @@ private:
         bool active[rows] {};
     };
     void publish();
+    void captureScene (SceneState& into) const;
+    void applyScene (const SceneState& sc);
     void handleMidi (juce::MidiBuffer& midi, const Plan& plan);
 
     std::array<std::array<std::shared_ptr<Block>, cols>, rows> cells;

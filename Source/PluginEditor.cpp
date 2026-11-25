@@ -106,7 +106,7 @@ void Drawer::sync()
 
 //==============================================================================
 NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), tempo (p.engine), library (p), grid (p), drawer (p)
+    : AudioProcessorEditor (&p), proc (p), tempo (p.engine), library (p), grid (p), sceneBar (p), drawer (p)
 {
     LookAndFeel::setDefaultLookAndFeel (&lnf);
     setLookAndFeel (&lnf);
@@ -169,6 +169,10 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     {
         CallOutBox::launchAsynchronously (std::make_unique<MergePanel> (proc, row), grid.localAreaToGlobal (node), nullptr);
     };
+
+    addAndMakeVisible (sceneBar);
+    sceneBar.onChanged = [this] { grid.repaint(); if (drawerOpen) drawer.sync(); };
+    sceneBar.onMessage = [this] (const String& s, bool w) { message (s, w); };
 
     drawer.onClose = [this] { closeDrawer(); };
     drawer.onChanged = [this] { grid.repaint(); };
@@ -299,6 +303,8 @@ void NAMHomeEditor::resized()
         drawer.setBounds (r.removeFromBottom (jlimit (300, 380, (int) (getHeight() * 0.42f))));
         r.removeFromBottom (12);
     }
+    sceneBar.setBounds (r.removeFromBottom (42));
+    r.removeFromBottom (8);
     grid.setBounds (r);
     toasts.setBounds (getLocalBounds().withTrimmedBottom (drawerOpen ? drawer.getHeight() + 30 : 20));
     if (settingsSheet != nullptr) settingsSheet->setBounds (getLocalBounds());

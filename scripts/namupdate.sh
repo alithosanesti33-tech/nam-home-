@@ -16,6 +16,7 @@ rm -rf "$TMP"
 touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 killall Dock >/dev/null 2>&1 || true
+killall Finder >/dev/null 2>&1 || true
 # keep this script itself up to date
 curl -fsSL "https://raw.githubusercontent.com/alithosanesti33-tech/nam-home-/main/scripts/namupdate.sh" -o "$HOME/namupdate.sh.new" 2>/dev/null && mv "$HOME/namupdate.sh.new" "$HOME/namupdate.sh" && chmod +x "$HOME/namupdate.sh" || true
 echo "Installed. Opening NAM Home..."

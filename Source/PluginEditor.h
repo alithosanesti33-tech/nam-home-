@@ -7,6 +7,7 @@
 #include "ui/BlockEditors.h"
 #include "ui/Panels.h"
 #include "ui/Tuner.h"
+#include "ui/SceneBar.h"
 
 // Tempo display: drag up/down to change, double-click to type a value.
 class TempoDisplay : public juce::Component
@@ -98,6 +99,7 @@ private:
 
     LibraryPanel library;
     GridView grid;
+    SceneBar sceneBar;
     Drawer drawer;
     Toasts toasts;
     std::unique_ptr<SettingsSheet> settingsSheet;

@@ -27,6 +27,8 @@ jobs:
         run: |
           APP="build/NAMHome_artefacts/Release/Standalone/NAM Home.app/Contents/MacOS/NAM Home"
           perl -e 'alarm 120; exec @ARGV' "$APP" --check-load "$HOME/NAMCore/example_models/slimmable_container.nam" "$HOME/NAMCore/example_models/A2.nam" "$HOME/NAMCore/example_models/lstm.nam" "$HOME/NAMCore/example_models/wavenet.nam"
+      - name: Full-size app icon (every size macOS asks for, Apple template shape)
+        run: iconutil -c icns Resources/NAMHome.iconset -o "build/NAMHome_artefacts/Release/Standalone/NAM Home.app/Contents/Resources/Icon.icns"
       - name: Sign locally
         run: codesign --force --deep --sign - "build/NAMHome_artefacts/Release/Standalone/NAM Home.app"
       - name: Zip app
