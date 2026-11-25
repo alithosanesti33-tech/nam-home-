@@ -362,6 +362,7 @@ void NAMHomeEditor::refreshAll()
     updateTransposeText();
     presetBtn.setButtonText (presetTitle());
     metroBtn.lit = proc.engine.metronomeOn.load();
+    grid.resized();
     grid.repaint();
     tempo.repaint();
     // the drawer may show a block that was removed or replaced

@@ -1,6 +1,7 @@
 #pragma once
 #include "Look.h"
 #include "../Engine.h"
+#include <set>
 
 class NAMHomeProcessor;
 
@@ -24,11 +25,13 @@ public:
 
     bool isInterestedInDragSource (const SourceDetails&) override { return true; }
     void itemDragMove (const SourceDetails&) override;
-    void itemDragExit (const SourceDetails&) override { dropCell = { -1, -1 }; repaint(); }
+    void itemDragEnter (const SourceDetails&) override { dragging = true; resized(); repaint(); }
+    void itemDragExit (const SourceDetails&) override { dropCell = { -1, -1 }; dragging = false; resized(); repaint(); }
     void itemDropped (const SourceDetails&) override;
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void fileDragMove (const juce::StringArray&, int x, int y) override { dropCell = cellAt ({ x, y }); repaint(); }
-    void fileDragExit (const juce::StringArray&) override { dropCell = { -1, -1 }; repaint(); }
+    void fileDragEnter (const juce::StringArray&, int, int) override { dragging = true; resized(); repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dropCell = { -1, -1 }; dragging = false; resized(); repaint(); }
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
     juce::Point<int> selected { 0, 1 };              // x = column, y = row
@@ -43,6 +46,12 @@ public:
     void removeAt (juce::Point<int> cell);
     juce::Rectangle<float> cellBounds (int r, int c) const;
     juce::Rectangle<float> inputChip (int r) const;
+    juce::Rectangle<float> addPathButton() const;
+    bool rowShown (int r) const;
+    int displayIndex (int r) const;
+    int numShownRows() const;
+    std::set<int> openedRows;          // empty branches the user added
+    bool dragging = false;             // while dragging, every row is a drop target
     void showInputMenu (int row);
 
 private:

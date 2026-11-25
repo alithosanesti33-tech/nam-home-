@@ -5,22 +5,54 @@ using namespace juce;
 
 GridView::GridView (NAMHomeProcessor& p) : proc (p) {}
 
+bool GridView::rowShown (int r) const
+{
+    if (r == 0 || dragging || openedRows.count (r) > 0) return true;
+    int f, l;
+    return proc.engine.rowSpan (r, f, l) || proc.engine.rowInput[r].load() > 0;
+}
+
+int GridView::numShownRows() const
+{
+    int n = 0;
+    for (int r = 0; r < Engine::rows; ++r) if (rowShown (r)) ++n;
+    return n;
+}
+
+int GridView::displayIndex (int r) const
+{
+    int d = 0;
+    for (int k = 0; k < r; ++k) if (rowShown (k)) ++d;
+    return d;
+}
+
+Rectangle<float> GridView::addPathButton() const
+{
+    if (numShownRows() >= Engine::rows || dragging) return {};
+    const int last = [this] { int l = 0; for (int r = 0; r < Engine::rows; ++r) if (rowShown (r)) l = r; return l; }();
+    const auto cb = cellBounds (last, 0);
+    return { cb.getX(), cb.getBottom() + jmin (24.0f, gap * 1.2f), 128.0f, 28.0f };
+}
+
 void GridView::resized()
 {
     const float w = (float) getWidth(), h = (float) getHeight();
     const float sideRoom = 100.0f;
     tile = jlimit (58.0f, 118.0f, (w - 2 * sideRoom) / (Engine::cols + (Engine::cols - 1) * 0.2f));
     gap = tile * 0.2f;
-    rowPitch = jmin (tile + gap * 1.6f, (h - 20.0f) / Engine::rows);
+    const int shown = numShownRows();
+    rowPitch = jmin (tile + gap * 1.6f, (h - 60.0f) / Engine::rows);
     tile = jmin (tile, rowPitch - 18.0f);
     const float gridW = Engine::cols * tile + (Engine::cols - 1) * gap;
     x0 = (w - gridW) * 0.5f;
-    y0 = jmax (8.0f, (h - (Engine::rows * rowPitch - (rowPitch - tile))) * 0.5f);
+    const float used = shown * rowPitch - (rowPitch - tile) + (shown < Engine::rows ? 52.0f : 0.0f);
+    y0 = jmax (8.0f, (h - used) * 0.5f);
 }
 
 Rectangle<float> GridView::cellBounds (int r, int c) const
 {
-    return { x0 + c * (tile + gap), y0 + r * rowPitch, tile, tile };
+    if (! rowShown (r)) return {};
+    return { x0 + c * (tile + gap), y0 + displayIndex (r) * rowPitch, tile, tile };
 }
 
 Rectangle<float> GridView::inputChip (int r) const
@@ -37,9 +69,13 @@ void GridView::showInputMenu (int row)
     if (row > 0) m.addItem (1, "From main path (split and merge)", true, cur == 0);
     m.addItem (2, "Interface input 1 (separate rig)", true, cur == 1);
     m.addItem (3, "Interface input 2 (separate rig)", true, cur == 2);
+    int f, l;
+    const bool empty = ! proc.engine.rowSpan (row, f, l);
+    if (row > 0) { m.addSeparator(); m.addItem (4, "Remove this path", empty); }
     m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (inputChip (row).toNearestInt())), [this, row] (int r)
     {
         if (r == 0) return;
+        if (r == 4) { openedRows.erase (row); proc.engine.rowInput[row] = 0; resized(); repaint(); if (onChanged) onChanged(); return; }
         proc.engine.rowInput[row] = r - 1;
         proc.dirty = true;
         repaint();
@@ -50,8 +86,9 @@ void GridView::showInputMenu (int row)
 Point<int> GridView::cellAt (Point<int> p) const
 {
     for (int r = 0; r < Engine::rows; ++r)
-        for (int c = 0; c < Engine::cols; ++c)
-            if (cellBounds (r, c).expanded (gap * 0.5f, 6).contains (p.toFloat())) return { c, r };
+        if (rowShown (r))
+            for (int c = 0; c < Engine::cols; ++c)
+                if (cellBounds (r, c).expanded (gap * 0.5f, 6).contains (p.toFloat())) return { c, r };
     return { -1, -1 };
 }
 
@@ -203,10 +240,8 @@ void GridView::paint (Graphics& g)
     // input chips at the start of each row
     for (int r = 0; r < Engine::rows; ++r)
     {
-        int f, l;
-        const bool used = r == 0 || e.rowSpan (r, f, l);
+        if (! rowShown (r)) continue;
         const int in = e.rowInput[r].load();
-        if (! used && in == 0 && hoverCell.y != r) continue;
         auto chip = inputChip (r);
         g.setColour (in > 0 ? theme::raised : theme::bg);
         g.fillRoundedRectangle (chip, 8.0f);
@@ -217,10 +252,24 @@ void GridView::paint (Graphics& g)
         g.drawText (in > 0 ? "IN " + String (in) : String ("SPLIT"), chip, Justification::centred);
     }
 
+    // add a parallel path (rows stay hidden until you ask for one, like a single-chain view)
+    if (auto ab = addPathButton(); ! ab.isEmpty())
+    {
+        const bool hot = ab.contains (getMouseXYRelative().toFloat());
+        g.setColour (hot ? theme::hover : theme::bg);
+        g.fillRoundedRectangle (ab, 8.0f);
+        g.setColour (hot ? theme::muted : theme::line.brighter (0.15f));
+        g.drawRoundedRectangle (ab.reduced (0.5f), 8.0f, 1.0f);
+        g.setColour (hot ? theme::text : theme::faint);
+        g.setFont (theme::font (12.0f, 2));
+        g.drawText ("+  Add path", ab, Justification::centred);
+    }
+
     // cells
     for (int r = 0; r < Engine::rows; ++r)
         for (int c = 0; c < Engine::cols; ++c)
         {
+            if (! rowShown (r)) continue;
             auto cb = cellBounds (r, c);
             auto b = e.get (r, c);
             const bool isSel = selected == Point<int> (c, r);
@@ -262,13 +311,22 @@ void GridView::mouseMove (const MouseEvent& e)
     const auto c = cellAt (e.getPosition());
     setMouseCursor (mergeNodeAt (e.getPosition()) > 0 ? MouseCursor::PointingHandCursor : MouseCursor::NormalCursor);
     if (c != hoverCell) { hoverCell = c; repaint(); }
+    if (auto ab = addPathButton(); ! ab.isEmpty()) repaint (ab.expanded (2).toNearestInt());
 }
 
 void GridView::mouseDown (const MouseEvent& e)
 {
     dragStarted = false;
+    if (auto ab = addPathButton(); ab.contains (e.position))
+    {
+        for (int r = 1; r < Engine::rows; ++r)
+            if (! rowShown (r)) { openedRows.insert (r); break; }
+        pressCell = { -1, -1 };
+        resized(); repaint();
+        return;
+    }
     for (int r = 0; r < Engine::rows; ++r)
-        if (inputChip (r).contains (e.position)) { pressCell = { -1, -1 }; showInputMenu (r); return; }
+        if (rowShown (r) && inputChip (r).contains (e.position)) { pressCell = { -1, -1 }; showInputMenu (r); return; }
     const int node = mergeNodeAt (e.getPosition());
     if (node > 0)
     {
@@ -359,6 +417,7 @@ void GridView::removeAt (Point<int> cell)
 {
     proc.engine.set (cell.y, cell.x, nullptr);
     proc.dirty = true;
+    resized();
     repaint();
     if (onSelect) onSelect (cell);
     if (onChanged) onChanged();
@@ -402,6 +461,8 @@ void GridView::itemDropped (const SourceDetails& d)
 {
     const auto cell = cellAt (d.localPosition.toInt());
     dropCell = { -1, -1 };
+    dragging = false;
+    if (cell.y > 0) openedRows.insert (cell.y);
     if (cell.x < 0) { repaint(); return; }
     const auto desc = d.description.toString();
 
@@ -422,6 +483,7 @@ void GridView::itemDropped (const SourceDetails& d)
         selected = cell;
         if (onSelect) onSelect (cell);
     }
+    resized();
     repaint();
     if (onChanged) onChanged();
 }
@@ -430,6 +492,8 @@ void GridView::filesDropped (const StringArray& files, int x, int y)
 {
     auto cell = cellAt ({ x, y });
     dropCell = { -1, -1 };
+    dragging = false;
+    if (cell.y > 0) openedRows.insert (cell.y);
     Array<File> fs;
     for (auto& f : files) fs.add (File (f));
     const int added = proc.library.importFiles (fs);
@@ -447,6 +511,7 @@ void GridView::filesDropped (const StringArray& files, int x, int y)
         if (onSelect) onSelect (cell);
     }
     else if (onMessage) onMessage (added > 0 ? String (added) + " added to your library" : "Nothing new to add", false);
+    resized();
     repaint();
     if (onChanged) onChanged();
 }
