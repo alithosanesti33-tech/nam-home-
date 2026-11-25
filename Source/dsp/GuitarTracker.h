@@ -44,6 +44,7 @@ public:
         velWindow = (int) (0.015f * rate);
         guardWindow = (int) (0.060f * rate);
         settle = (int) (0.002f * rate);
+        releaseHold = (int) (0.06f * rate);
         reset();
     }
 
@@ -54,7 +55,7 @@ public:
         have = false; noteValid = false;
         candidate = 0; candCount = 0;
         sinceAttack = 1 << 30; velPeak = 0; vibEnergy = 0; lastHz = 0;
-        histN = 0;
+        histN = 0; noteActive = false; notePeak = 0; quietFor = 0;
     }
 
     void setThresholdDb (float db) { gate.setThresholdDb (db); gateDb = db; }
@@ -68,22 +69,33 @@ public:
         f.level = clamp ((envDb - gateDb) / 36.0f, 0.0f, 1.0f);
 
         const auto g = gate.process (x);
-        if (g.opened) { f.attack = true; noteValid = false; histN = 0; candCount = 0; sinceAttack = 0; velPeak = 0; }
-        else if (g.onset)
+        // A note is "active" from a pick until it closes at the gate OR fades well below how
+        // hard it was picked. Hum or hiss can keep the gate open forever, so the fade test is
+        // what makes notes end (and the next pick a fresh attack) on a noisy input.
+        const bool pick = g.opened || g.onset;
+        if (pick)
         {
-            // a new pick while a note still rings: the pitch is unknown again until the tracker
-            // confirms it, so the instrument never plays the old note on the new attack
-            f.repick = true; sinceAttack = 0; velPeak = 0;
+            if (noteActive && ! g.opened) f.repick = true; else f.attack = true;
+            noteActive = true; notePeak = env; quietFor = 0;
+            sinceAttack = 0; velPeak = 0;
+            // the pitch is unknown again until the tracker confirms it, so an instrument never
+            // plays the old note on the new attack
             noteValid = false; histN = 0; candCount = 0;
         }
-        if (g.closed) f.released = true;
+        if (noteActive)
+        {
+            notePeak = std::max (notePeak, env);
+            quietFor = env < notePeak * releaseRatio ? quietFor + 1 : 0;
+            if (g.closed || ! g.open || quietFor > releaseHold) { noteActive = false; f.released = true; }
+        }
         if (sinceAttack < (1 << 30)) ++sinceAttack;
         if (sinceAttack < velWindow) velPeak = std::max (velPeak, f.level);
         f.velocity = velPeak;
 
         phat::PitchTracker::Result r;
-        if (tracker.push (pre2.process (pre1.process (x)), g.trackerActive, r) && r.hz > 0.0f)
-            onEstimate (phat::hzToMidi (r.hz), g.open, f);
+        // pitch is only read while a note is active: a dying string or hum never moves the pitch
+        if (tracker.push (pre2.process (pre1.process (x)), g.trackerActive, r) && r.hz > 0.0f && noteActive)
+            onEstimate (phat::hzToMidi (r.hz), true, f);
 
         // fine pitch follows the accepted pitch with ~1.5 ms smoothing (results arrive every ~0.5 ms)
         fine += fineCoef * (accepted - fine);
@@ -92,7 +104,7 @@ public:
         vibEnergy += vibCoef * (dev * dev - vibEnergy);
         f.vibrato = clamp (std::sqrt (vibEnergy) / 0.25f, 0.0f, 1.0f);   // 25 cents rms = full
 
-        f.open = g.open;
+        f.open = noteActive;
         f.valid = noteValid && have;
         f.midi = fine;
         f.centre = centre;
@@ -162,5 +174,7 @@ private:
     int sinceAttack = 1 << 30, velWindow = 720, guardWindow = 2880, settle = 96;
     float velPeak = 0, lastHz = 0;
     float hist[3] {}; int histN = 0;
+    bool noteActive = false; float notePeak = 0; int quietFor = 0, releaseHold = 2880;
+    float releaseRatio = 0.025f;   // -32 dB below the note's own peak ends it
 };
 } // namespace ndsp

@@ -3,6 +3,7 @@
 #include "phat/PhatCore.h"
 #include "dsp/GuitarTracker.h"
 #include "dsp/SaxVoice.h"
+#include "dsp/SaxSampler.h"
 
 namespace nam { class DSP; }
 
@@ -348,6 +349,9 @@ protected:
 private:
     ndsp::GuitarTracker tracker;
     ndsp::SaxVoice voice;
+    ndsp::SaxSampler sampler;
+    ndsp::Biquad recBright, recSub;
+    float lastBright = -1, lastSub = -1, growlPh = 0;
     float rate = 48000.0f;
     bool sounding = false, pending = false, pendingFromSilence = false, releasing = false;
     int pendingAge = 0;

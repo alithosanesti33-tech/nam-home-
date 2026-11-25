@@ -57,6 +57,14 @@ NAMHomeProcessor::NAMHomeProcessor()
     appSettings = std::make_unique<juce::PropertiesFile> (o);
     tone3000 = std::make_unique<Tone3000> (library, *appSettings);
     library.setPluginMode (isPlugin());
+    ndsp::SaxSampleBank::get().setRoot (library.getFolder());   // recordings live next to your captures (on your SSD)
+    {
+        // tell the installer where the library is, so downloads (sax recordings) land on the same drive
+        auto f = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                     .getChildFile ("Application Support").getChildFile ("NAM Home").getChildFile ("library-path.txt");
+        f.getParentDirectory().createDirectory();
+        if (f.loadFileAsString().trim() != library.getFolder().getFullPathName()) f.replaceWithText (library.getFolder().getFullPathName());
+    }
 
     buildDefaultRig();
     startTimerHz (15);

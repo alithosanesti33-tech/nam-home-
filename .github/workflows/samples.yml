@@ -24,6 +24,13 @@ jobs:
         run: |
           pip install numpy soundfile
           python3 scripts/slice_sax.py src out
+      - name: Publish as a download for the installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out && echo "v1" > .version && zip -qr ../NAM-Home-Sax.zip . -x report.json && cd ..
+          gh release view sax-recordings >/dev/null 2>&1 || gh release create sax-recordings --title "Sax recordings" --notes "University of Iowa MIS alto and soprano saxophone recordings (free for any use), one file per note. Installed by ~/namupdate.sh into your NAM Home folder."
+          gh release upload sax-recordings NAM-Home-Sax.zip --clobber
       - name: Push to samples branch
         run: |
           cd out

@@ -161,7 +161,7 @@ namespace
         sGate, sSens, sDynamics, sSustain, sAttack, sLegato, sTongue,
         sBright, sBreath, sGrowl, sSubtone, sBody, sClicks,
         sScoop, sFall, sPitchMode, sGuitarVib,
-        sVibMode, sVibAmount, sVibDepth, sVibRate, sVibDelay
+        sVibMode, sVibAmount, sVibDepth, sVibRate, sVibDelay, sSound
     };
     const int saxDefaultOctave[4] = { 2, 2, 1, 1 };   // index into { -2, -1, 0, +1, +2 }
 }
@@ -182,7 +182,7 @@ SaxBlock::SaxBlock() : Block (Type::Sax)
     addFloat ("dynamics", "Pick dynamics", 0, 100, 85, "%", -1, 1);
     addFloat ("sustain", "Sustain", 0, 100, 65, "%", -1, 1);
     addFloat ("attack", "Attack bite", 0, 100, 60, "%", -1, 1);
-    addFloat ("legato", "Legato glide", 0, 200, 35, "ms", -1, 1);
+    addFloat ("legato", "Legato glide", 0, 200, 15, "ms", -1, 1);
     addToggle ("tongue", "Tongue re-picks", true);
     currentGroup = "Tone";
     addFloat ("bright", "Brightness", 0, 100, 65, "%", -1, 1);
@@ -192,7 +192,7 @@ SaxBlock::SaxBlock() : Block (Type::Sax)
     addFloat ("body", "Body", 0, 100, 50, "%", -1, 1);
     addFloat ("clicks", "Key clicks", 0, 100, 30, "%", -1, 1);
     currentGroup = "Expression";
-    addFloat ("scoop", "Scoop", 0, 100, 25, "%", -1, 1);
+    addFloat ("scoop", "Scoop", 0, 100, 0, "%", -1, 1);
     addFloat ("fall", "Fall-off", 0, 100, 0, "%", -1, 1);
     addChoice ("pitchMode", "Pitch", { "Follow guitar", "Snap to notes" }, 0);
     addFloat ("guitarVib", "Your vibrato", 0, 100, 100, "%", -1, 1);
@@ -202,7 +202,11 @@ SaxBlock::SaxBlock() : Block (Type::Sax)
     addFloat ("vibDepth", "Depth", 0, 60, 25, "cents", -1, 0.1f);
     addFloat ("vibRate", "Rate", 3, 8, 5.3f, "Hz", -1, 0.01f);
     addFloat ("vibDelay", "Delay", 0, 1500, 350, "ms", -1, 1);
+    currentGroup = "Saxophone";
+    // index 29: real recordings (alto and soprano; tenor and bari borrow the alto) or the modeled horn
+    addChoice ("sound", "Sound", { "Recorded", "Modeled" }, 0);
     currentGroup = {};
+    ndsp::SaxSampleBank::get().requestLoad();
 }
 
 juce::String SaxBlock::getTitle() const { return params[sModel]->text() + " sax"; }
@@ -220,12 +224,13 @@ void SaxBlock::prepare (double sr, int)
     rate = (float) sr;
     tracker.prepare (sr);
     voice.prepare (rate);
+    sampler.prepare (rate);
     reset();
 }
 
 void SaxBlock::reset()
 {
-    tracker.reset(); voice.reset();
+    tracker.reset(); voice.reset(); sampler.reset(); recBright.reset(); recSub.reset(); lastBright = lastSub = -1;
     sounding = pending = pendingFromSilence = releasing = false;
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
@@ -275,7 +280,18 @@ void SaxBlock::process (float* L, float* R, int n)
     const float atkC = coef (0.022f - 0.017f * atk), relC = coef (fallSemis > 0.01f ? 0.16f : 0.045f), holdC = coef (0.03f);
     const float biteC = coef (0.03f), tongueC = coef (0.006f), dipC = coef (0.02f);
     const float vibGC = coef (0.12f), fallC = coef (0.09f);
-    const int maxPending = (int) (0.035f * rate);
+    // recorded horns: soprano and alto are real; tenor and bari borrow the alto recordings, lowered
+    auto& bank = ndsp::SaxSampleBank::get();
+    static const int hornFor[4] = { 1, 0, 0, 0 };
+    static const float shiftFor[4] = { 0.0f, 0.0f, 5.0f, 10.0f };
+    const bool recorded = (int) p (sSound) == 0 && bank.has (hornFor[model]);
+    sampler.setHorn (hornFor[model], shiftFor[model]);
+    const float growl = p (sGrowl) * 0.01f;
+    {
+        const float br = p (sBright), sb = p (sSubtone);
+        if (br != lastBright) { recBright.set (ndsp::Biquad::Type::HighShelf, rate, 3000.0f, 0.7f, (br - 65.0f) * 0.2f); lastBright = br; }
+        if (sb != lastSub) { recSub.set (ndsp::Biquad::Type::LowPass, rate, 16000.0f * std::pow (0.15f, sb * 0.01f), 0.6f); lastSub = sb; }
+    }
 
     auto foldFor = [&] (float m)
     {
@@ -302,7 +318,7 @@ void SaxBlock::process (float* L, float* R, int n)
         if (f.attack || (f.repick && sounding))
         {
             pending = true; pendingAge = 0; pendingFromSilence = f.attack || ! sounding;
-            if (! pendingFromSilence && tongueOn) tongue = 1.0f;   // tongue stops the reed while we confirm the new note
+            if (! pendingFromSilence && tongueOn) tongue = 0.7f;   // a quick tongue dip, never a gap
             voice.keyClick (0.35f + 0.4f * atk);                    // the breath "chiff" starts right away
         }
         if (pending)
@@ -318,11 +334,12 @@ void SaxBlock::process (float* L, float* R, int n)
                 const float target = played + fold;
                 if (fresh) { scoopOff = -scoopSemis * (0.6f + 0.4f * noteVel); glideOff = 0; breath = 0.0f; }
                 else if (std::abs (target - lastPitch) > 0.5f) { glideOff = 0; scoopOff = -scoopSemis * 0.4f; voice.keyClick (0.6f); }
+                sampler.noteStart (target, fresh ? 0 : (tongueOn ? 2 : 1));
                 bite = atk * (0.15f + 0.25f * noteVel);
                 sounding = true; releasing = false; fallOff = 0; fallTarget = 0;
                 noteTime = 0;
             }
-            else if (pendingAge > maxPending) { pending = false; tongue = 0; }   // never found a pitch: let the old note carry on
+            // no timeout: a note that is slow to detect still plays the moment its pitch is known
         }
         if (f.noteChange && sounding && ! pending)
         {
@@ -333,12 +350,14 @@ void SaxBlock::process (float* L, float* R, int n)
             fold = newFold;
             voice.keyClick (0.8f);
             dipEnv = 0.18f;
+            sampler.noteStart (target, 1);
             noteTime = 0;
         }
         if (f.released && sounding)
         {
             releasing = true; sounding = false; pending = false;
             fallTarget = -fallSemis;
+            sampler.noteStop (fallSemis > 0.01f ? 0.25f : 0.08f);
         }
 
         // breath from your picking: "Pick dynamics" sets how much it matters, "Sustain" holds the
@@ -347,10 +366,9 @@ void SaxBlock::process (float* L, float* R, int n)
         x = std::max (x, f.level);
         x = dyn * x + (1.0f - dyn) * 0.72f;
         float target = (sounding && ! pending) ? 0.15f + 0.85f * std::pow (juce::jlimit (0.0f, 1.0f, x), 0.8f) : 0.0f;
-        if (pending && ! pendingFromSilence && sounding) target = breath;   // hold while the tongue is on the reed
         breath += (target > breath ? (noteTime < 0.06f ? atkC : holdC) : (releasing ? relC : holdC)) * (target - breath);
         bite += biteC * (0.0f - bite);
-        if (! pending) tongue += tongueC * (0.0f - tongue);
+        tongue += tongueC * (0.0f - tongue);
         dipEnv += dipC * (0.0f - dipEnv);
         const float blow = juce::jmax (0.0f, (breath + bite) * (1.0f - 0.85f * tongue) * (1.0f - dipEnv));
 
@@ -379,7 +397,19 @@ void SaxBlock::process (float* L, float* R, int n)
 
         outPitch = pitch;
         if (sounding && ! pending) lastPitch = played + fold;
-        const float y = (blow > 0.0005f || sounding) ? voice.tick (pitch, blow * ampVib) * volume : voice.tick (pitch, 0.0f) * volume;
+        float y;
+        if (recorded)
+        {
+            float r = sampler.tick (pitch, blow * ampVib);
+            if (growl > 0.001f)
+            {
+                growlPh += 33.0f * dtS; if (growlPh >= 1.0f) growlPh -= 1.0f;
+                r *= 1.0f + growl * 0.5f * std::sin (6.2831853f * growlPh) * blow;
+                r = std::tanh (r * (1.0f + growl * 4.0f)) / (1.0f + growl * 1.5f);
+            }
+            y = recSub.process (recBright.process (r)) * volume * (blow > 0.0f || sampler.sounding() ? 1.0f : 0.0f) + voice.tick (pitch, 0.0f) * volume;
+        }
+        else y = (blow > 0.0005f || sounding) ? voice.tick (pitch, blow * ampVib) * volume : voice.tick (pitch, 0.0f) * volume;
         L[i] = y + inL * dry;
         R[i] = y + inR * dry;
         if (f.valid) lastHz = tracker.hz();

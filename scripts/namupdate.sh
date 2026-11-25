@@ -24,6 +24,23 @@ if curl -fsL "https://github.com/alithosanesti33-tech/nam-home-/releases/downloa
   killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
   echo "Logic plugin installed (Audio Units > NAM Home > NAM Home)."
 fi
+# Sax recordings (about 100 MB), only when missing or outdated. They go in your NAM Home
+# library folder (the one the app uses, e.g. on your external SSD), never in the app itself.
+LIBFILE="$HOME/Library/Application Support/NAM Home/library-path.txt"
+if [ -f "$LIBFILE" ]; then NH="$(cat "$LIBFILE")"; else NH="$HOME/Music/NAM Home"; fi
+SAX="$NH/Instruments/Sax"
+if [ "$(cat "$SAX/.version" 2>/dev/null)" != "v1" ]; then
+  if [ -d "$NH" ] || mkdir -p "$NH" 2>/dev/null; then
+    echo "Downloading the sax recordings into $SAX ..."
+    if curl -fL --progress-bar "https://github.com/alithosanesti33-tech/nam-home-/releases/download/sax-recordings/NAM-Home-Sax.zip" -o "$TMP/sax.zip"; then
+      rm -rf "$SAX"; mkdir -p "$SAX"
+      ditto -x -k "$TMP/sax.zip" "$SAX/"
+      echo "Sax recordings installed."
+    fi
+  else
+    echo "Couldn't reach $NH (is the SSD plugged in?). Sax recordings skipped; run this again with it connected."
+  fi
+fi
 rm -rf "$TMP"
 # make Finder and the Dock show the current icon instead of a cached one
 touch "$APP"
