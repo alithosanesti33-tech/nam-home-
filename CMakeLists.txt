@@ -51,6 +51,7 @@ target_sources(NAMHome PRIVATE
     Source/ui/BlockEditors.cpp
     Source/ui/GridView.cpp
     Source/ui/Panels.cpp
+    Source/ui/Tuner.cpp
 )
 
 # NAM core is built as its own object library and linked straight into the app.

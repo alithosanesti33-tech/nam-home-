@@ -51,6 +51,14 @@ public:
     void setBpm (float bpm) { Block::context().bpm = juce::jlimit (30.0f, 300.0f, bpm); }
     float getBpm() const { return Block::context().bpm.load(); }
 
+    // ---- tuner: the audio thread copies the chosen input into a ring buffer the UI reads
+    std::atomic<bool> tunerOn { false }, tunerMute { true };
+    std::atomic<int> tunerInput { 1 };
+    static constexpr int tunerSize = 8192;
+    float tunerBuf[tunerSize] {};
+    std::atomic<int> tunerWrite { 0 };
+    void readTuner (float* dest, int n) const;   // newest n samples (message thread)
+
     // ---- meters
     std::atomic<float> inputPeak { 0 }, outputPeakL { 0 }, outputPeakR { 0 };
     double getCpuLoad() const { return loadMeasurer.getLoadAsProportion(); }

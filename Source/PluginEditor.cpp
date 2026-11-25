@@ -113,7 +113,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     applyDisplaySettings();
 
     for (auto* c : std::initializer_list<Component*> { &libraryBtn, &prevBtn, &nextBtn, &presetBtn, &saveBtn, &tempo, &tapBtn, &metroBtn,
-                                                       &browseT3k, &inMeter, &outMeter, &fullBtn, &settingsBtn, &library, &grid })
+                                                       &browseT3k, &inMeter, &outMeter, &tunerBtn, &fullBtn, &settingsBtn, &library, &grid })
         addAndMakeVisible (c);
     addChildComponent (drawer);
     addAndMakeVisible (toasts);
@@ -144,6 +144,11 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
         });
     };
     fullBtn.onClick = [this] { toggleFullscreen(); };
+    tunerBtn.onClick = [this] { openTuner(); };
+    liveTuner = std::make_unique<LiveTuner> (proc);
+    liveTuner->onClick = [this] { openTuner(); };
+    addChildComponent (*liveTuner);
+    liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false));
     settingsBtn.onClick = [this] { openSettings(); };
 
     library.onLoadFile = [this] (const File& f) { loadFromLibrary (f); };
@@ -263,6 +268,9 @@ void NAMHomeEditor::resized()
     settingsBtn.setBounds (t.removeFromRight (36));
     t.removeFromRight (4);
     fullBtn.setBounds (t.removeFromRight (36));
+    t.removeFromRight (4);
+    tunerBtn.setBounds (t.removeFromRight (36));
+    if (liveTuner != nullptr && liveTuner->isVisible()) { t.removeFromRight (8); liveTuner->setBounds (t.removeFromRight (170)); }
     t.removeFromRight (16);
     outMeter.setBounds (t.removeFromRight (90).withSizeKeepingCentre (90, 8));
     t.removeFromRight (40);
@@ -285,6 +293,23 @@ void NAMHomeEditor::resized()
     grid.setBounds (r);
     toasts.setBounds (getLocalBounds().withTrimmedBottom (drawerOpen ? drawer.getHeight() + 30 : 20));
     if (settingsSheet != nullptr) settingsSheet->setBounds (getLocalBounds());
+    if (tunerPanel != nullptr) tunerPanel->setBounds (getLocalBounds());
+}
+
+void NAMHomeEditor::openTuner()
+{
+    tunerPanel = std::make_unique<TunerPanel> (proc);
+    tunerPanel->onClose = [this]
+    {
+        MessageManager::callAsync ([this]
+        {
+            tunerPanel = nullptr;
+            liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false));
+            resized();
+        });
+    };
+    addAndMakeVisible (*tunerPanel);
+    tunerPanel->setBounds (getLocalBounds());
 }
 
 void NAMHomeEditor::selectCell (Point<int> cell)
@@ -356,6 +381,7 @@ bool NAMHomeEditor::keyPressed (const KeyPress& k)
 {
     if (k == KeyPress::escapeKey)
     {
+        if (tunerPanel != nullptr) { tunerPanel->setVisible (false); MessageManager::callAsync ([this] { tunerPanel = nullptr; liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false)); resized(); }); return true; }
         if (settingsSheet != nullptr) { settingsSheet = nullptr; return true; }
         if (proc.engine.isLearning()) { proc.engine.cancelLearn(); return true; }
         closeDrawer(); return true;
@@ -366,6 +392,7 @@ bool NAMHomeEditor::keyPressed (const KeyPress& k)
     if ((k == KeyPress::deleteKey || k == KeyPress::backspaceKey) && sel != nullptr) { grid.removeAt (grid.selected); return true; }
     if (k == KeyPress ('b') && sel != nullptr) { sel->enabled = ! sel->enabled.load(); proc.dirty = true; refreshAll(); return true; }
     if (k == KeyPress ('t')) { tapBtn.triggerClick(); return true; }
+    if (k == KeyPress ('u')) { openTuner(); return true; }
     return false;
 }
 

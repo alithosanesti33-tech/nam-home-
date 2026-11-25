@@ -23,6 +23,10 @@ jobs:
         run: cmake -B build -S . -DJUCE_PATH="$HOME/JUCE" -DNAM_CORE_PATH="$HOME/NAMCore" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - name: Build app
         run: cmake --build build --config Release --target NAMHome_Standalone -j
+      - name: Check that every NAM capture type loads in the built app
+        run: |
+          APP="build/NAMHome_artefacts/Release/Standalone/NAM Home.app/Contents/MacOS/NAM Home"
+          perl -e 'alarm 120; exec @ARGV' "$APP" --check-load "$HOME/NAMCore/example_models/slimmable_container.nam" "$HOME/NAMCore/example_models/A2.nam" "$HOME/NAMCore/example_models/lstm.nam" "$HOME/NAMCore/example_models/wavenet.nam"
       - name: Sign locally
         run: codesign --force --deep --sign - "build/NAMHome_artefacts/Release/Standalone/NAM Home.app"
       - name: Zip app

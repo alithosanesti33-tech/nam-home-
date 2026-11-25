@@ -6,6 +6,7 @@
 #include "ui/GridView.h"
 #include "ui/BlockEditors.h"
 #include "ui/Panels.h"
+#include "ui/Tuner.h"
 
 // Tempo display: drag up/down to change, double-click to type a value.
 class TempoDisplay : public juce::Component
@@ -86,6 +87,10 @@ private:
     IconButton metroBtn { IconButton::Icon::Metronome, "Metronome" };
     juce::TextButton browseT3k { "Browse TONE3000" };
     Meter inMeter, outMeter;
+    IconButton tunerBtn { IconButton::Icon::Tuner, "Tuner (live tuner and mute options inside)" };
+    std::unique_ptr<LiveTuner> liveTuner;
+    std::unique_ptr<TunerPanel> tunerPanel;
+    void openTuner();
     IconButton fullBtn { IconButton::Icon::Fullscreen, "Full screen" };
     IconButton settingsBtn { IconButton::Icon::Gear, "Settings" };
 

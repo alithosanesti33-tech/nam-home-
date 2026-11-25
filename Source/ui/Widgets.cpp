@@ -344,6 +344,11 @@ void IconButton::paintButton (Graphics& g, bool over, bool down)
                 g.fillEllipse (Rectangle<float> (3, 3).withCentre (a.getCentre() + Point<float> (std::sin (ang), std::cos (ang)) * 4.5f));
             }
             return;
+        case Icon::Tuner:
+            p.startNewSubPath (a.getX() + 2, a.getBottom() - 3);
+            p.addCentredArc (a.getCentreX(), a.getBottom() - 3, 8, 8, 0, -1.3f, 1.3f, false);
+            p.startNewSubPath (a.getCentreX(), a.getBottom() - 3); p.lineTo (a.getCentreX() + 3, a.getY() + 3);
+            break;
         case Icon::Power:
             p.addCentredArc (a.getCentreX(), a.getCentreY() + 1, 7, 7, 0, 0.6f, MathConstants<float>::twoPi - 0.6f, true);
             p.startNewSubPath (a.getCentreX(), a.getY()); p.lineTo (a.getCentreX(), a.getCentreY());

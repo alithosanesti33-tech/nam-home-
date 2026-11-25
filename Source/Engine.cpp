@@ -111,6 +111,12 @@ void Engine::tapTempo()
     }
 }
 
+void Engine::readTuner (float* dest, int n) const
+{
+    int r = (tunerWrite.load() - n) & (tunerSize - 1);
+    for (int i = 0; i < n; ++i) { dest[i] = tunerBuf[r]; r = (r + 1) & (tunerSize - 1); }
+}
+
 void Engine::armLearn (int blockId, int param)
 {
     learnBlock = blockId;
@@ -207,6 +213,14 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         inputPeaks[k] = std::max (pk, inputPeaks[k].load() * 0.9f);
     }
     inputPeak = std::max (inputPeaks[0].load(), inputPeaks[1].load());
+
+    if (tunerOn.load())
+    {
+        const int ch = juce::jlimit (0, juce::jmax (0, numIn - 1), tunerInput.load() - 1);
+        int w = tunerWrite.load();
+        for (int i = 0; i < n; ++i) { tunerBuf[w] = numIn > 0 ? buffer.getReadPointer (ch)[i] : 0.0f; w = (w + 1) & (tunerSize - 1); }
+        tunerWrite = w;
+    }
 
     bool independent[rows];
     for (int r = 0; r < rows; ++r) independent[r] = rowIsIndependent (r);
@@ -315,6 +329,8 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         }
     }
     else beatPos = 0;
+
+    if (tunerOn.load() && tunerMute.load()) { std::fill (mL, mL + n, 0.0f); std::fill (mR, mR + n, 0.0f); }
 
     const int numOut = buffer.getNumChannels();
     if (numOut == 1)

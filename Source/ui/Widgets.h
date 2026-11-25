@@ -111,7 +111,7 @@ private:
 class IconButton : public juce::Button
 {
 public:
-    enum class Icon { Gear, Fullscreen, Library, Metronome, Close, Chevron, Plus, Save, Prev, Next, Midi, Power };
+    enum class Icon { Gear, Fullscreen, Library, Metronome, Close, Chevron, Plus, Save, Prev, Next, Midi, Power, Tuner };
     IconButton (Icon i, const juce::String& tip) : juce::Button (tip), icon (i) { setTooltip (tip); }
     void paintButton (juce::Graphics&, bool over, bool down) override;
     Icon icon;
