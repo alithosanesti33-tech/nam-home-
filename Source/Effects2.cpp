@@ -666,27 +666,60 @@ void DoublerBlock::process (float* L, float* R, int n)
 FuzzBlock::FuzzBlock() : Block (Type::Fuzz)
 {
     addChoice ("type", "Type", { "Big Muff style", "Fuzz Face style", "Germanium (Buffalo FX style)" }, 0);
-    addFloat ("fuzz", "Sustain", 0, 10, 7, {}, -1, 0.1f);
+    auto& fzP = addFloat ("fuzz", "Sustain", 0, 10, 7, {}, -1, 0.1f);
     auto& tn = addFloat ("tone", "Tone", 0, 10, 5, {}, -1, 0.1f);
     auto& bias = addFloat ("bias", "Bias", 0, 10, 6, {}, -1, 0.1f);
     addFloat ("volume", "Volume", 0, 10, 5, {}, -1, 0.1f);
-    auto& pre = addFloat ("pregain", "Pre-gain", 0, 10, 5, {}, -1, 0.1f);   // the Buffalo's "P" knob
-    tn.visible = [] (const Block& b) { return b.params[0]->getInt() == 0; };
-    bias.visible = [] (const Block& b) { return b.params[0]->getInt() >= 1; };
+    auto& pre = addFloat ("pregain", "Pre-gain (P)", 0, 10, 5, {}, -1, 0.1f);   // the Buffalo's "P" knob
+    // Big Muff only: which Muff, a mids knob to fill the scoop, and the tone bypass switch
+    auto& ver = addChoice ("version", "Version", { "Ram's Head '73 (Gilmour: Animals, The Wall)",
+                                                   "Civil War (Gilmour: Division Bell, Pulse)",
+                                                   "Black Russian (Frusciante: Californication)",
+                                                   "NYC reissue (Frusciante: By the Way, Stadium Arcadium)",
+                                                   "Triangle '71" }, 0);
+    auto& mids = addFloat ("mids", "Mids", 0, 10, 0, {}, -1, 0.1f);
+    auto& tb = addToggle ("toneBypass", "Tone bypass", false);
+    // the knob names follow the pedal: Sustain on a Muff, Fuzz on a Fuzz Face, F on the Buffalo
+    auto* fzPtr = &fzP; auto* biasPtr = &bias;
+    fzP.visible = [fzPtr] (const Block& b)
+    {
+        const int t = b.params[0]->getInt();
+        fzPtr->name = t == 0 ? "Sustain" : t == 1 ? "Fuzz" : "Fuzz (F)";
+        return true;
+    };
+    bias.visible = [biasPtr] (const Block& b)
+    {
+        const int t = b.params[0]->getInt();
+        biasPtr->name = t == 1 ? "Bias (inside trim)" : "Bias";
+        return t >= 1;
+    };
+    tn.visible = [] (const Block& b) { return b.params[0]->getInt() == 0 && ! b.params[8]->on(); };
     pre.visible = [] (const Block& b) { return b.params[0]->getInt() == 2; };
+    for (auto* q : { &ver, &mids }) q->visible = [] (const Block& b) { return b.params[0]->getInt() == 0; };
+    tb.visible = [] (const Block& b) { return b.params[0]->getInt() == 0; };
 }
 
 std::vector<Block::StartingPoint> FuzzBlock::startingPoints() const
 {
     return {
+        { "Comfortably Numb (Gilmour, Ram's Head)", "Ram's Head with sustain around 6 and tone just past noon: smooth and singing. Add delay and a big reverb after it.",
+          { { "type", 0 }, { "version", 0 }, { "fuzz", 6 }, { "tone", 5.5f }, { "volume", 6 }, { "mids", 1.5f }, { "toneBypass", 0 } } },
+        { "Animals / Dogs (Gilmour, Ram's Head)", "More sustain, a little brighter.",
+          { { "type", 0 }, { "version", 0 }, { "fuzz", 7.5f }, { "tone", 6.5f }, { "volume", 6 }, { "mids", 1 }, { "toneBypass", 0 } } },
+        { "Pulse era (Gilmour, Civil War)", "The Civil War Muff: brighter, less gain, more mids.",
+          { { "type", 0 }, { "version", 1 }, { "fuzz", 6.5f }, { "tone", 5 }, { "volume", 6 }, { "mids", 2 }, { "toneBypass", 0 } } },
+        { "Californication (Frusciante, Black Russian)", "Thick and dark, for big chords and fuzzy leads.",
+          { { "type", 0 }, { "version", 2 }, { "fuzz", 7 }, { "tone", 5.5f }, { "volume", 6 }, { "mids", 1 }, { "toneBypass", 0 } } },
+        { "By the Way / Stadium Arcadium (Frusciante, NYC)", "The US Big Muff: more gain, deep scoop, lots of low end.",
+          { { "type", 0 }, { "version", 3 }, { "fuzz", 7.5f }, { "tone", 6 }, { "volume", 6 }, { "mids", 0 }, { "toneBypass", 0 } } },
         { "Germanium: huge (Rabea style)", "Fuzz and pre-gain up, bias at the sweet spot. Roll your guitar volume back to clean it up.",
           { { "type", 2 }, { "fuzz", 9 }, { "pregain", 7 }, { "bias", 5 }, { "volume", 5 } } },
-        { "Germanium: classic 60s", "The Hendrix-era sound: fuzzy but open, cleans up beautifully with the guitar volume.",
+        { "Germanium: classic 60s", "Fuzzy but open; cleans up beautifully with the guitar volume.",
           { { "type", 2 }, { "fuzz", 7 }, { "pregain", 4 }, { "bias", 5.5f }, { "volume", 5 } } },
         { "Germanium: sputtery / gated", "Bias turned down: notes break up and sputter as they die away.",
           { { "type", 2 }, { "fuzz", 8 }, { "pregain", 5 }, { "bias", 1.5f }, { "volume", 6 } } },
-        { "Germanium: low fuzz, fat drive", "Fuzz low: more like a big, warm overdrive.",
-          { { "type", 2 }, { "fuzz", 3 }, { "pregain", 5 }, { "bias", 6 }, { "volume", 5 } } },
+        { "Fuzz Face: silicon, Hendrix '70", "Brighter and more aggressive than germanium; still cleans up with the guitar volume.",
+          { { "type", 1 }, { "fuzz", 8 }, { "bias", 5 }, { "volume", 5 } } },
     };
 }
 
@@ -695,128 +728,165 @@ void FuzzBlock::prepare (double sr, int maxBlockSize)
     geDriftCoef = 1.0f - std::exp (-1.0f / (0.025f * (float) sr * 4.0f));
     os = std::make_unique<juce::dsp::Oversampling<float>> (2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
     os->initProcessing ((size_t) maxBlockSize);
-    const float osr = (float) sr * 4.0f;
     for (int c = 0; c < 2; ++c)
     {
-        inHp[c].set (Biquad::Type::HighPass, (float) sr, 60.0f, 0.7f);
-        post[c].set (Biquad::Type::HighPass, (float) sr, 25.0f, 0.7f);
-        stageLp[c][0].setLowpass (osr, 7000.0f);
-        stageLp[c][1].setLowpass (osr, 5500.0f);
-        geIn[c].setLowpass (osr, 6000.0f);
-        geOut[c].setLowpass (osr, 9000.0f);
-        biasEnv[c] = 0; geDrift[c] = 0;
+        post[c].set (Biquad::Type::HighPass, (float) sr, 20.0f, 0.7f);
+        geDrift[c] = 0;
+        for (auto* f : { &geIn[c], &geOut[c], &mInHp[c], &mHp1[c], &mHp2[c], &mLp1[c], &mLp2[c], &mToneLp[c], &mToneHp[c] }) f->reset();
     }
+    lastType = lastVersion = -1;
     level.reset ((float) sr);
 }
 
-// Germanium Fuzz Face (what the Buffalo FX Germanium Fuzz is built on): two germanium transistors
-// with feedback. Q1 is set by Pre-gain, Q2's gain by Fuzz. Q2's collector sits at a DC voltage set by
-// Bias and can only swing up to the 9 V rail (cutoff: a soft, round edge) or down to about 0.2 V
-// (saturation: a harder edge), so a centred bias gives the big, smooth square-ish fuzz and a low bias
-// squashes one side and starves the stage. Hard playing charges the bypass capacitor, which pulls the
-// bias down for a moment: that's the bloom when you dig in and the sputter as notes die at low bias.
-// Nothing normalises the input, so turning your guitar down really cleans it up.
+// soft clip with an adjustable knee: hard = 2 is round, higher is a sharper edge
 static inline float geClip (float v, float lim, float hard)
 {
     const float a = std::abs (v) / lim;
     return v / std::pow (1.0f + std::pow (a, hard), 1.0f / hard);
 }
 
-float FuzzBlock::germanium (int c, float x)
+//------------------------------------------------------------------------------
+// Fuzz Face (germanium = the Buffalo FX Germanium Fuzz, or silicon = BC108 Fuzz Face): two transistors
+// with feedback. Q1 is set by Pre-gain, Q2's gain by Fuzz. Q2's collector sits at a DC voltage set by
+// Bias and can only swing up to the 9 V rail (cutoff: a round edge) or down to about 0.2 V
+// (saturation: a harder edge). Hard playing charges the bypass capacitor and pulls the bias down for
+// a moment: the bloom when you dig in, and the sputter as notes die at low bias. Nothing normalises
+// the input, so turning your guitar down really cleans it up.
+float FuzzBlock::fuzzFace (int c, float x, bool silicon)
 {
-    // pickup loading: the Fuzz Face's low input impedance takes a little top off the guitar
-    x = geIn[c].lp (x);
-    const float pre = p (5) * 0.1f, fz = p (1) * 0.1f, bias = p (3) * 0.1f;
-    // overall small-signal gain like a real Fuzz Face: about 6x with Fuzz down, ~125x flat out.
-    // A guitar peaks around 0.1-0.5 here, so full fuzz clips hard, and rolling the guitar back to a
-    // tenth of that brings it close to clean.
-    const float total = 6.0f + 120.0f * std::pow (fz, 1.6f);
+    x = geIn[c].lp (x);   // pickup loading: the low input impedance takes a little top off the guitar
+    const float pre = silicon ? 0.5f : p (5) * 0.1f, fz = p (1) * 0.1f, bias = p (3) * 0.1f;
+    // overall small-signal gain like the real pedal: ~6x with Fuzz down, ~125x (silicon ~200x) flat out
+    const float total = 6.0f + (silicon ? 200.0f : 120.0f) * std::pow (fz, 1.6f);
     const float preScale = 0.35f + 1.65f * pre;
-    // Q1: about 8x, saturates softly around a volt and a half (Pre-gain pushes it harder)
-    const float q1 = geClip (x * preScale * 8.0f, 1.5f, 2.2f);
-    // operating point (volts at Q2's collector) and how far hard playing drags it down
+    const float q1 = geClip (x * preScale * 8.0f, silicon ? 1.2f : 1.5f, silicon ? 3.0f : 2.2f);
     const float vc = 1.0f + 7.0f * bias;
     const float starvedBias = std::pow (1.0f - bias, 2.0f);
-    const float drift = geDrift[c] * (0.5f + 5.0f * starvedBias);
+    // silicon barely leaks, so its bias hardly moves; germanium drifts and sputters
+    const float drift = geDrift[c] * (silicon ? 0.25f : (0.5f + 5.0f * starvedBias));
     const float vcNow = std::max (0.25f, vc - drift);
     const float up = 9.0f - vcNow, down = vcNow - 0.2f;
-    // a starved transistor (collector close to saturation) loses gain: small signals stop getting
-    // through, so decays break up and sputter instead of sustaining
     const float starve = juce::jlimit (0.04f, 1.0f, down / (1.2f + 2.5f * starvedBias));
-    float v = -q1 * (total / 8.0f) * starve;             // Q2 inverts
-    v = v > 0.0f ? geClip (v, up, 2.0f)                  // cutoff side: round
-                 : geClip (v, std::max (0.05f, down), 4.0f);   // saturation side: harder
-    // the bypass cap charges with the clipped waveform's imbalance (about 25 ms)
+    float v = -q1 * (total / 8.0f) * starve;
+    v = v > 0.0f ? geClip (v, up, silicon ? 3.0f : 2.0f)
+                 : geClip (v, std::max (0.05f, down), silicon ? 6.0f : 4.0f);
     const float imbalance = std::max (0.0f, std::abs (v) - 0.5f) * (v < 0 ? 1.0f : 0.35f);
     geDrift[c] += (imbalance * 0.12f - geDrift[c]) * geDriftCoef;
-    // transistor capacitance smooths the edges
     v = geOut[c].lp (v);
-    return v * 0.25f;   // volts -> working level
+    return v * 0.25f;
+}
+
+//------------------------------------------------------------------------------
+// Big Muff: an input booster, two clipping stages (silicon diodes in each transistor's feedback,
+// so it compresses and sustains rather than squares off), each with its own low-pass and a
+// coupling high-pass between them, then the passive tone stack (a low-pass and a high-pass blended
+// by the Tone knob: the famous mid scoop) and a recovery stage. The versions differ in those values.
+namespace
+{
+struct MuffVoicing
+{
+    float boost, stage2, clipV, interHp, stageLp, toneLp, toneHp, outDb, inHp;
+};
+// Ram's Head '73: smooth, mid-forward, articulate, sings (Gilmour's main Muff from Animals on)
+// Civil War (Sovtek, early '90s): brighter, less gain, shallow scoop (Gilmour's Pulse-era Muff)
+// Black Russian (Sovtek V8): thick, dark, bassy (Frusciante, Californication tour)
+// NYC reissue: the most gain, deepest scoop, lots of low end (Frusciante, By the Way / Stadium Arcadium)
+// Triangle '71: the first Muff: softer, smoother, mild scoop
+const MuffVoicing muffs[] = {
+    { 3.0f, 32.0f, 0.65f, 140.0f, 4600.0f, 460.0f, 1150.0f, 0.0f, 50.0f },
+    { 2.4f, 22.0f, 0.70f, 120.0f, 5600.0f, 720.0f, 940.0f, 1.0f, 60.0f },
+    { 3.4f, 36.0f, 0.62f, 70.0f, 3900.0f, 380.0f, 1250.0f, 0.5f, 35.0f },
+    { 4.2f, 46.0f, 0.60f, 55.0f, 4300.0f, 400.0f, 1650.0f, -0.5f, 30.0f },
+    { 2.5f, 24.0f, 0.72f, 120.0f, 5000.0f, 560.0f, 1000.0f, 0.5f, 55.0f },
+};
+}
+
+float FuzzBlock::muffStages (int c, float x, int version)
+{
+    const auto& v = muffs[juce::jlimit (0, 4, version)];
+    const float sus = p (1) * 0.1f;
+    x = mInHp[c].hp (x);
+    x *= v.boost;                                                     // input booster
+    // the Sustain pot sets the gain of the first clipping stage
+    float y = x * (1.0f + 70.0f * sus * sus);
+    y = mLp1[c].lp (v.clipV * std::asinh (y / v.clipV) + 0.02f * y / (1.0f + std::abs (y)));   // diodes + a touch of transistor asymmetry
+    y = mHp1[c].hp (y);
+    y = y * v.stage2;
+    y = mLp2[c].lp (v.clipV * std::asinh (y / v.clipV));
+    y = mHp2[c].hp (y);
+    return y;
 }
 
 void FuzzBlock::process (float* L, float* R, int n)
 {
     const int t = (int) p (0);
-    const float fz = p (1) * 0.1f, tone = p (2) * 0.1f, bias = p (3) * 0.1f;
-    float* ch[2] = { L, R };
-    for (int c = 0; c < 2; ++c)
+    const int version = (int) p (6);
+    const float osr = (float) sampleRate * 4.0f;
+    if (t != lastType || version != lastVersion)
     {
-        // Big Muff tone stack: a 1-pole low-pass and high-pass blended, with the classic mid scoop
-        muffLp[c].set (Biquad::Type::LowPass, sampleRate, 480.0f, 0.5f);
-        muffHp[c].set (Biquad::Type::HighPass, sampleRate, 1100.0f, 0.5f);
-        faceLp[c].set (Biquad::Type::LowPass, sampleRate, t == 2 ? 6500.0f : 5200.0f, t == 2 ? 0.5f : 0.6f);
-        inHp[c].set (Biquad::Type::HighPass, sampleRate, t == 0 ? 60.0f : t == 2 ? 12.0f : 30.0f, 0.7f);   // germanium keeps every bit of low end
-        for (int i = 0; i < n; ++i) ch[c][i] = inHp[c].process (ch[c][i]);
+        lastType = t; lastVersion = version;
+        const auto& v = muffs[juce::jlimit (0, 4, version)];
+        for (int c = 0; c < 2; ++c)
+        {
+            if (t == 0)
+            {
+                mInHp[c].setLowpass (osr, v.inHp);
+                mHp1[c].setLowpass (osr, v.interHp);
+                mHp2[c].setLowpass (osr, v.interHp * 0.8f);
+                mLp1[c].setLowpass (osr, v.stageLp);
+                mLp2[c].setLowpass (osr, v.stageLp * 0.85f);
+                mToneLp[c].setLowpass ((float) sampleRate, v.toneLp);
+                mToneHp[c].setLowpass ((float) sampleRate, v.toneHp);
+            }
+            else
+            {
+                geIn[c].setLowpass (osr, t == 1 ? 8500.0f : 6000.0f);
+                geOut[c].setLowpass (osr, t == 1 ? 11000.0f : 9000.0f);
+            }
+            faceLp[c].set (Biquad::Type::LowPass, (float) sampleRate, t == 1 ? 7500.0f : 6500.0f, 0.5f);
+        }
     }
-    // plenty of gain: these should really fuzz (a guitar's level sits well below full scale)
-    const float fz3 = fz * fz * fz;   // low settings stay gritty, high settings go fully fuzzed
-    const float g = t == 0 ? 2.0f + 2200.0f * fz3 : (t == 1 ? 1.5f + 700.0f * fz3 : 1.0f);   // germanium sets its own gain
-    for (int i = 0; i < n; ++i) { L[i] *= g; R[i] *= g; }
+    // Mids: a broad lift right where the Muff scoops (like the mid switches on modern Muffs)
+    const float midsDb = p (7) * 1.0f;
+    for (int c = 0; c < 2; ++c) midPeak[c].set (Biquad::Type::Peak, (float) sampleRate, 850.0f, 0.7f, midsDb);
 
+    float* ch[2] = { L, R };
     juce::dsp::AudioBlock<float> block (ch, 2, (size_t) n);
     auto up = os->processSamplesUp (block);
     const int m = (int) up.getNumSamples();
-    const float envC = 1.0f - std::exp (-1.0f / (0.03f * sampleRate * 4.0f));
     for (int c = 0; c < 2; ++c)
     {
         float* x = up.getChannelPointer ((size_t) c);
         for (int i = 0; i < m; ++i)
-        {
-            float v = x[i];
-            if (t == 2)
-            {
-                v = germanium (c, v);
-            }
-            else if (t == 0)
-            {
-                // two clipping transistor stages with diodes, filtered between
-                v = stageLp[c][0].lp (v);
-                v = v / std::sqrt (1.0f + v * v);
-                v = stageLp[c][1].lp (v * 12.0f);
-                v = v / std::sqrt (1.0f + v * v);
-            }
-            else
-            {
-                // germanium pair: asymmetric, bias shifts with level (sputter at low bias, cleans up with guitar volume)
-                biasEnv[c] += envC * (std::abs (v) - biasEnv[c]);
-                const float b = (0.15f + 0.45f * bias) - 0.25f * std::min (1.0f, biasEnv[c] * 0.2f);
-                v = fastTanh (v + b) - fastTanh (b);
-                v = v > 0 ? v : v * (0.55f + 0.4f * bias);
-                v = stageLp[c][0].lp (v);
-            }
-            x[i] = v;
-        }
+            x[i] = t == 0 ? muffStages (c, x[i], version) : fuzzFace (c, x[i], t == 1);
     }
     os->processSamplesDown (block);
-    const float makeup = t == 0 ? dbToGain (-13.0f) : (t == 1 ? dbToGain (-16.0f) : dbToGain (-21.0f));
+
+    const float tone = p (2) * 0.1f;
+    const bool bypassTone = p (8) > 0.5f;
+    float makeup;
+    if (t == 0) makeup = dbToGain (-22.0f + muffs[juce::jlimit (0, 4, version)].outDb);
+    else makeup = dbToGain (-21.0f);
     level.setTarget (dbToGain ((p (4) - 5.0f) * 4.0f) * makeup);
     for (int c = 0; c < 2; ++c)
         for (int i = 0; i < n; ++i)
         {
             float y = ch[c][i];
-            if (t == 0) y = muffLp[c].process (y) * (1.0f - tone) * 1.3f + muffHp[c].process (y) * tone * 1.6f;
-            else if (t == 1) y = faceLp[c].process (y);
-            else y = faceLp[c].process (y);   // germanium: the transistors' own soft top end
+            if (t == 0)
+            {
+                // tone stack: Tone fades from the low-pass (dark, thick) to the high-pass (bright, thin);
+                // the dip in between is the scoop. Tone bypass skips it: flat and mid-heavy, like the
+                // later Muffs' tone bypass switch.
+                if (! bypassTone)
+                {
+                    const float lo = mToneLp[c].lp (y), hi = mToneHp[c].hp (y);
+                    y = (lo * (1.0f - tone) + hi * tone) * 2.2f;
+                }
+                else y *= 0.85f;
+                y = midPeak[c].process (y);
+                y *= 0.55f;   // recovery stage into the volume pot
+            }
+            else y = faceLp[c].process (y);
             ch[c][i] = post[c].process (y);
         }
     for (int i = 0; i < n; ++i) { const float lv = level.next(); L[i] *= lv; R[i] *= lv; }

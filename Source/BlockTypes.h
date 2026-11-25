@@ -504,13 +504,14 @@ protected:
     void prepare (double sr, int maxBlock) override;
     void process (float* L, float* R, int n) override;
 private:
-    float germanium (int c, float x);
+    float fuzzFace (int c, float x, bool silicon);
+    float muffStages (int c, float x, int version);
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
-    ndsp::Biquad inHp[2], muffLp[2], muffHp[2], faceLp[2], bigLow[2], post[2];
-    ndsp::OnePole stageLp[2][2], geIn[2], geOut[2];
-    float geDrift[2] {}, geDriftCoef = 0.001f;
+    ndsp::Biquad faceLp[2], midPeak[2], post[2];
+    ndsp::OnePole geIn[2], geOut[2], mInHp[2], mHp1[2], mHp2[2], mLp1[2], mLp2[2], mToneLp[2], mToneHp[2];
     ndsp::Smoothed level;
-    float biasEnv[2] {};
+    float geDrift[2] {}, geDriftCoef = 0.001f;
+    int lastType = -1, lastVersion = -1;
 };
 
 // "@ Drive": Andy Timmons style British crunch with 25/50/100 W headroom and a TS boost.
