@@ -77,8 +77,10 @@ int GridView::mergeNodeAt (Point<int> p) const
         int f, l;
         if (! proc.engine.rowSpan (r, f, l)) continue;
         const bool own = proc.engine.rowIsIndependent (r);
-        const Point<float> node = own ? Point<float> (cellBounds (r, Engine::cols - 1).getRight() + 22.0f, cellBounds (r, 0).getCentreY())
-                                      : Point<float> (mergeX (r), cy);
+        ignoreUnused (cy);
+        const float rowY = cellBounds (r, 0).getCentreY();
+        const Point<float> node = own ? Point<float> (cellBounds (r, Engine::cols - 1).getRight() + 22.0f, rowY)
+                                      : Point<float> (mergeX (r), rowY - 14.0f);
         if (node.getDistanceFrom (p.toFloat()) < 11.0f) return r;
     }
     return -1;
@@ -187,9 +189,10 @@ void GridView::paint (Graphics& g)
         if (e.rowIsIndependent (r)) node = { cellBounds (r, Engine::cols - 1).getRight() + 22.0f, cellBounds (r, 0).getCentreY() };
         else
         {
-            node = { mergeX (r), cy0 };
+            node = { mergeX (r), cellBounds (r, 0).getCentreY() - 14.0f };   // on this row's own return line
             g.setColour (theme::path);
             g.fillEllipse (splitX (r) - 4, cy0 - 4, 8, 8);
+            g.fillEllipse (mergeX (r) - 4, cy0 - 4, 8, 8);
         }
         g.setColour (theme::bg);
         g.fillEllipse (Rectangle<float> (14, 14).withCentre (node));
@@ -272,7 +275,11 @@ void GridView::mouseDown (const MouseEvent& e)
         if (onMergeClicked)
         {
             const float cy0 = cellBounds (0, 0).getCentreY();
-            onMergeClicked (node, Rectangle<int> ((int) mergeX (node) - 8, (int) cy0 - 8, 16, 16));
+            ignoreUnused (cy0);
+            const bool own = proc.engine.rowIsIndependent (node);
+            const float nx = own ? cellBounds (node, Engine::cols - 1).getRight() + 22.0f : mergeX (node);
+            const float ny = cellBounds (node, 0).getCentreY() - (own ? 0.0f : 14.0f);
+            onMergeClicked (node, Rectangle<int> ((int) nx - 8, (int) ny - 8, 16, 16));
         }
         pressCell = { -1, -1 };
         return;
