@@ -496,7 +496,9 @@ DrumsBlock::DrumsBlock() : Block (Type::Drums)
     currentGroup = "Drums";
     addToggle ("play", "Start / stop", false);
     addChoice ("groove", "Groove", grooveNames(), 0);
-    addChoice ("kit", "Kit", kitChoices, kitChoices.size() > 1 ? 1 : 0);
+    int defKit = kitChoices.size() > 1 ? 1 : 0;
+    for (int i = 1; i < kitChoices.size(); ++i) if (kitChoices[i].startsWithIgnoreCase ("Acoustic")) defKit = i;
+    addChoice ("kit", "Kit", kitChoices, defKit);
     addFloat ("volume", "Volume", 0, 150, 70, "%", -1, 1);
     addFloat ("swing", "Swing", 0, 100, 0, "%", -1, 1);
     addFloat ("human", "Human feel", 0, 100, 25, "%", -1, 1);

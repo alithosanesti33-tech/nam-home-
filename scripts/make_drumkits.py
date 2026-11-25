@@ -19,7 +19,7 @@ GENERIC = {
     "hatopen": [["open"], ["hh", "op"]],
     "hatpedal": [["pedal"], ["foot"]],
     "ride": [["ride", "rock"], ["ride"]],
-    "bell": [["bell"], ["cowbell"]],
+    "bell": [["ride", "bell"]],
     "crash": [["crash"], ["splash"], ["china"]],
     "tom1": [["tom", "hi"], ["high tom"], ["tom 1"], ["tom1"]],
     "tom2": [["tom", "mid"], ["tom 2"], ["tom2"]],
@@ -131,7 +131,7 @@ def main():
         folder = os.path.join(src, kit)
         if not os.path.isdir(folder):
             continue
-        pretty = kit.replace("Kit", " kit").replace("_", " ").strip()
+        pretty = {"GMRockKit": "Acoustic kit", "TR808EmulationKit": "808 kit"}.get(kit, kit.replace("Kit", " kit").replace("_", " ").strip())
         r = make(folder, os.path.join(out, pretty), pretty, GENERIC)
         if r:
             summary[pretty] = r
