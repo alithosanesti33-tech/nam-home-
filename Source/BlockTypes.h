@@ -40,8 +40,8 @@ private:
     double expectedRate = 48000.0;
     float normGainDb = 0;
     std::vector<float> mono, out;
-    dsp::Biquad tight, preMid, postLow, postMid, postHigh;
-    dsp::Smoothed sIn, sOut;
+    ndsp::Biquad tight, preMid, postLow, postMid, postHigh;
+    ndsp::Smoothed sIn, sOut;
 };
 
 //==============================================================================
@@ -75,12 +75,12 @@ private:
         juce::String path;
         std::atomic<bool> loaded { false };
         int appliedAlign = -1;
-        dsp::Smoothed gain;
+        ndsp::Smoothed gain;
     };
     void rebuild (int index);
     std::array<Ir, numIrs> irs;
     juce::AudioBuffer<float> mono, work;
-    dsp::Biquad lowCut[2], highCut[2];
+    ndsp::Biquad lowCut[2], highCut[2];
 };
 
 //==============================================================================
@@ -92,7 +92,7 @@ protected:
     void prepare (double, int) override { env = {}; gain = 1; open = false; holdLeft = 0; }
     void process (float* L, float* R, int n) override;
 private:
-    dsp::Envelope env;
+    ndsp::Envelope env;
     float gain = 1;
     bool open = false;
     int holdLeft = 0;
@@ -120,11 +120,11 @@ protected:
 private:
     void updateFilters();
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
-    dsp::Biquad clipHp[2], tone[2], postHp[2];
-    dsp::OnePole clipLp[2];
-    dsp::DelayLine cleanDelay[2];
+    ndsp::Biquad clipHp[2], tone[2], postHp[2];
+    ndsp::OnePole clipLp[2];
+    ndsp::DelayLine cleanDelay[2];
     std::vector<float> clean[2];
-    dsp::Smoothed level, gain;
+    ndsp::Smoothed level, gain;
     int lastType = -1, osLatency = 0;
     float lastTone = -1, lastDrive = -1;
 };
@@ -137,10 +137,10 @@ protected:
     void prepare (double, int) override { for (auto& f : svf) f.reset(); posSm = -1; }
     void process (float* L, float* R, int n) override;
 private:
-    dsp::SVF svf[2];
-    dsp::Biquad hp[2];
+    ndsp::SVF svf[2];
+    ndsp::Biquad hp[2];
     float posSm = -1;
-    dsp::Smoothed level;
+    ndsp::Smoothed level;
 };
 
 class VolumeBlock : public Block
@@ -151,7 +151,7 @@ protected:
     void prepare (double sr, int) override { g.reset ((float) sr, 0.02f); }
     void process (float* L, float* R, int n) override;
 private:
-    dsp::Smoothed g;
+    ndsp::Smoothed g;
 };
 
 class GraphicEQBlock : public Block
@@ -164,10 +164,10 @@ protected:
     void prepare (double, int) override { dirty = true; for (auto& c : f) for (auto& b : c) b.reset(); }
     void process (float* L, float* R, int n) override;
 private:
-    dsp::Biquad f[2][numBands];
+    ndsp::Biquad f[2][numBands];
     float last[numBands + 1] {};
     bool dirty = true;
-    dsp::Smoothed level;
+    ndsp::Smoothed level;
 };
 
 class ParametricEQBlock : public Block
@@ -180,11 +180,11 @@ protected:
     void prepare (double, int) override { dirty = true; for (auto& c : f) for (auto& b : c) b.reset(); }
     void process (float* L, float* R, int n) override;
 private:
-    void design (dsp::Biquad* out, float sr) const;
-    dsp::Biquad f[2][numBands + 2];
+    void design (ndsp::Biquad* out, float sr) const;
+    ndsp::Biquad f[2][numBands + 2];
     std::vector<float> last;
     bool dirty = true;
-    dsp::Smoothed level;
+    ndsp::Smoothed level;
 };
 
 class UtilityBlock : public Block
@@ -195,7 +195,7 @@ protected:
     void prepare (double sr, int) override { gl.reset ((float) sr); gr.reset ((float) sr); }
     void process (float* L, float* R, int n) override;
 private:
-    dsp::Smoothed gl, gr;
+    ndsp::Smoothed gl, gr;
 };
 
 //==============================================================================
@@ -210,13 +210,13 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
-    dsp::DelayLine line[2];
-    dsp::Biquad fbLow[2], fbHigh[2], headBump[2];
-    dsp::OnePole age[2];
-    dsp::Wander wow[2];
-    dsp::LFO flutter, mod;
-    dsp::Smoothed timeSm[2];
-    dsp::Envelope swellEnv;
+    ndsp::DelayLine line[2];
+    ndsp::Biquad fbLow[2], fbHigh[2], headBump[2];
+    ndsp::OnePole age[2];
+    ndsp::Wander wow[2];
+    ndsp::LFO flutter, mod;
+    ndsp::Smoothed timeSm[2];
+    ndsp::Envelope swellEnv;
     float swellGain = 0, swellLastEnv = 0;
     float revPhase[2] = { 0, 0 };
     float fbState[2] = { 0, 0 };
@@ -236,29 +236,29 @@ protected:
 private:
     static constexpr int N = 8;
     void configure (int kind, float size);
-    dsp::DelayLine pre, fdn[N];
-    dsp::Allpass diff[4], springAp[2][12];
-    dsp::OnePole damp[N];
-    dsp::Biquad lowCut[2], springLp[2], springHp[2], drip[2];
-    dsp::Wander wander[N];
-    dsp::DelayLine shimmerBuf;
+    ndsp::DelayLine pre, fdn[N];
+    ndsp::Allpass diff[4], springAp[2][12];
+    ndsp::OnePole damp[N];
+    ndsp::Biquad lowCut[2], springLp[2], springHp[2], drip[2];
+    ndsp::Wander wander[N];
+    ndsp::DelayLine shimmerBuf;
     float shimmerPh = 0;
     float len[N] {};
     float fdnOut[N] {};
     int configuredKind = -1;
     float configuredSize = -1;
-    dsp::Envelope bloomEnv;
+    ndsp::Envelope bloomEnv;
     float bloomGain = 0;
-    dsp::DelayLine springLine[2];
+    ndsp::DelayLine springLine[2];
     float springFb[2] = { 0, 0 };
 
     // Dattorro plate tank
     struct Plate
     {
-        dsp::Allpass inDiff[4], decDiff1[2], decDiff2[2];
-        dsp::DelayLine d1[2], d2[2];
-        dsp::OnePole bandwidth, damping[2];
-        dsp::LFO lfo;
+        ndsp::Allpass inDiff[4], decDiff1[2], decDiff2[2];
+        ndsp::DelayLine d1[2], d2[2];
+        ndsp::OnePole bandwidth, damping[2];
+        ndsp::LFO lfo;
         float feedback[2] = { 0, 0 };
         float scale = 1;
         int lenD1[2] {}, lenD2[2] {};
@@ -279,14 +279,14 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
-    dsp::DelayLine line[2];
-    dsp::LFO lfo;
+    ndsp::DelayLine line[2];
+    ndsp::LFO lfo;
     struct AP1 { float z = 0; inline float process (float x, float a) { const float y = a * x + z; z = x - a * y; return y; } };
     AP1 ap[2][12];
     float fb[2] = { 0, 0 };
     float hornPh = 0, drumPh = 0, hornRate = 0.8f, drumRate = 0.7f;
-    dsp::Biquad xLow[2], xHigh[2];
-    dsp::DelayLine hornLine;
+    ndsp::Biquad xLow[2], xHigh[2];
+    ndsp::DelayLine hornLine;
     float vibeLamp = 0;
 };
 
@@ -299,8 +299,8 @@ protected:
     void reset() override { for (auto& l : line) l.clear(); for (auto& f : lp) f.reset(); fbState = 0; }
     void process (float* L, float* R, int n) override;
 private:
-    dsp::DelayLine line[3];
-    dsp::Biquad lp[3], inLp;
-    dsp::LFO lfo;
+    ndsp::DelayLine line[3];
+    ndsp::Biquad lp[3], inLp;
+    ndsp::LFO lfo;
     float fbState = 0;
 };

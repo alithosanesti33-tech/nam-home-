@@ -1,6 +1,6 @@
 #include "Engine.h"
 
-using namespace dsp;
+using namespace ndsp;
 
 Engine::Engine()
 {
@@ -195,19 +195,36 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     float* mL = buf[0][0].data();
     float* mR = buf[0][1].data();
     const float inG = dbToGain (inputGainDb.load());
-    float inPk = 0;
-    for (int i = 0; i < n; ++i)
+    auto inputSample = [&] (int input, int i) -> float
     {
-        const float x = (numIn > 0 ? buffer.getReadPointer (0)[i] : 0.0f) * inG;   // guitar input is mono
-        mL[i] = mR[i] = x;
-        inPk = std::max (inPk, std::abs (x));
+        const int ch = juce::jlimit (0, juce::jmax (0, numIn - 1), input - 1);
+        return numIn > 0 ? buffer.getReadPointer (ch)[i] * inG : 0.0f;
+    };
+    for (int k = 0; k < 2; ++k)
+    {
+        float pk = 0;
+        if (k < numIn) for (int i = 0; i < n; ++i) pk = std::max (pk, std::abs (buffer.getReadPointer (k)[i] * inG));
+        inputPeaks[k] = std::max (pk, inputPeaks[k].load() * 0.9f);
     }
-    inputPeak = std::max (inPk, inputPeak.load() * 0.9f);
+    inputPeak = std::max (inputPeaks[0].load(), inputPeaks[1].load());
+
+    bool independent[rows];
+    for (int r = 0; r < rows; ++r) independent[r] = rowIsIndependent (r);
+
+    // main row (and any row with its own input) starts from its interface input
+    for (int r = 0; r < rows; ++r)
+    {
+        if (! independent[r] || (r > 0 && ! plan.active[r])) continue;
+        const int input = juce::jlimit (1, 2, rowInput[r].load());
+        float* l = buf[r][0].data();
+        float* rr = buf[r][1].data();
+        for (int i = 0; i < n; ++i) l[i] = rr[i] = inputSample (input, i);   // a guitar input is mono
+    }
 
     for (int c = 0; c < cols; ++c)
     {
         for (int r = 1; r < rows; ++r)
-            if (plan.active[r] && plan.first[r] == c)
+            if (! independent[r] && plan.active[r] && plan.first[r] == c)
             {
                 std::copy (mL, mL + n, buf[r][0].begin());
                 std::copy (mR, mR + n, buf[r][1].begin());
@@ -215,13 +232,16 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
 
         if (auto* b = plan.cell[0][c]) b->run (mL, mR, n);
         for (int r = 1; r < rows; ++r)
-            if (plan.active[r] && c >= plan.first[r] && c <= plan.last[r] && plan.cell[r][c] != nullptr)
+        {
+            if (! plan.active[r] || plan.cell[r][c] == nullptr) continue;
+            if (independent[r] || (c >= plan.first[r] && c <= plan.last[r]))
                 plan.cell[r][c]->run (buf[r][0].data(), buf[r][1].data(), n);
+        }
 
         bool mainScaled = false;
         for (int r = 1; r < rows; ++r)
         {
-            if (! plan.active[r] || plan.last[r] != c) continue;
+            if (independent[r] || ! plan.active[r] || plan.last[r] != c) continue;
             auto& m = merges[r];
             if (! mainScaled)
             {
@@ -236,6 +256,18 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
             const float* br = buf[r][1].data();
             for (int i = 0; i < n; ++i) { mL[i] += bl[i] * gl; mR[i] += br[i] * gr; }
         }
+    }
+
+    // separate rigs (own input) are mixed in at the end with their level and pan
+    for (int r = 1; r < rows; ++r)
+    {
+        if (! independent[r] || ! plan.active[r]) continue;
+        auto& m = merges[r];
+        const float g = dbToGain (m.branchLevel.load()), pan = m.branchPan.load();
+        const float gl = g * std::min (1.0f, 1.0f - pan), gr = g * std::min (1.0f, 1.0f + pan);
+        const float* bl = buf[r][0].data();
+        const float* br = buf[r][1].data();
+        for (int i = 0; i < n; ++i) { mL[i] += bl[i] * gl; mR[i] += br[i] * gr; }
     }
 
     // output
@@ -327,6 +359,9 @@ juce::var Engine::toVar() const
     }
     o->setProperty ("merges", ms);
     o->setProperty ("bpm", getBpm());
+    juce::Array<juce::var> ins;
+    for (int r = 0; r < rows; ++r) ins.add (rowInput[r].load());
+    o->setProperty ("rowInputs", ins);
 
     juce::Array<juce::var> maps;
     for (auto& m : mappings)
@@ -370,6 +405,9 @@ void Engine::fromVar (const juce::var& v)
             merges[r].branchLevel = (float) m.getProperty ("branchLevel", 0.0f);
             merges[r].branchPan = (float) m.getProperty ("branchPan", 0.0f);
         }
+    if (auto* ins = v.getProperty ("rowInputs", {}).getArray())
+        for (int r = 0; r < rows && r < ins->size(); ++r) rowInput[r] = juce::jlimit (r == 0 ? 1 : 0, 2, (int) (*ins)[r]);
+    else for (int r = 0; r < rows; ++r) rowInput[r] = r == 0 ? 1 : 0;
     if (v.hasProperty ("bpm")) setBpm ((float) v.getProperty ("bpm", 120.0f));
 
     {

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 // Small, allocation-free DSP building blocks used by the effects.
-namespace dsp
+namespace ndsp
 {
 constexpr float pi = 3.14159265358979f;
 constexpr float twoPi = 6.28318530717958f;
@@ -226,4 +226,4 @@ inline float fastTanh (float x)
     const float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
-} // namespace dsp
+} // namespace ndsp

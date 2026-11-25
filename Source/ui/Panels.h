@@ -96,4 +96,5 @@ public:
 private:
     std::unique_ptr<ValueKnob> mainLevel, mainPan, branchLevel, branchPan;
     int row;
+    bool independent = false;
 };

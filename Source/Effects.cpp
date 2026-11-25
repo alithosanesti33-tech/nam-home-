@@ -1,7 +1,7 @@
 // Built-in effects. Every control here changes the sound; nothing is a cosmetic knob.
 #include "BlockTypes.h"
 
-using namespace dsp;
+using namespace ndsp;
 
 static inline void mixInto (float& out, float dry, float wet, float mix01, bool killDry)
 {

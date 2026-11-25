@@ -8,7 +8,7 @@ GridView::GridView (NAMHomeProcessor& p) : proc (p) {}
 void GridView::resized()
 {
     const float w = (float) getWidth(), h = (float) getHeight();
-    const float sideRoom = 56.0f;
+    const float sideRoom = 100.0f;
     tile = jlimit (58.0f, 118.0f, (w - 2 * sideRoom) / (Engine::cols + (Engine::cols - 1) * 0.2f));
     gap = tile * 0.2f;
     rowPitch = jmin (tile + gap * 1.6f, (h - 20.0f) / Engine::rows);
@@ -21,6 +21,30 @@ void GridView::resized()
 Rectangle<float> GridView::cellBounds (int r, int c) const
 {
     return { x0 + c * (tile + gap), y0 + r * rowPitch, tile, tile };
+}
+
+Rectangle<float> GridView::inputChip (int r) const
+{
+    const auto cb = cellBounds (r, 0);
+    return { cb.getX() - 92.0f, cb.getCentreY() - 13.0f, 58.0f, 26.0f };
+}
+
+void GridView::showInputMenu (int row)
+{
+    PopupMenu m;
+    m.addSectionHeader ("Row " + String (row + 1) + " input");
+    const int cur = proc.engine.rowInput[row].load();
+    if (row > 0) m.addItem (1, "From main path (split and merge)", true, cur == 0);
+    m.addItem (2, "Interface input 1 (separate rig)", true, cur == 1);
+    m.addItem (3, "Interface input 2 (separate rig)", true, cur == 2);
+    m.showMenuAsync (PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (inputChip (row).toNearestInt())), [this, row] (int r)
+    {
+        if (r == 0) return;
+        proc.engine.rowInput[row] = r - 1;
+        proc.dirty = true;
+        repaint();
+        if (onChanged) onChanged();
+    });
 }
 
 Point<int> GridView::cellAt (Point<int> p) const
@@ -52,7 +76,10 @@ int GridView::mergeNodeAt (Point<int> p) const
     {
         int f, l;
         if (! proc.engine.rowSpan (r, f, l)) continue;
-        if (Point<float> (mergeX (r), cy).getDistanceFrom (p.toFloat()) < 10.0f) return r;
+        const bool own = proc.engine.rowIsIndependent (r);
+        const Point<float> node = own ? Point<float> (cellBounds (r, Engine::cols - 1).getRight() + 22.0f, cellBounds (r, 0).getCentreY())
+                                      : Point<float> (mergeX (r), cy);
+        if (node.getDistanceFrom (p.toFloat()) < 11.0f) return r;
     }
     return -1;
 }
@@ -115,30 +142,40 @@ void GridView::paint (Graphics& g)
 {
     auto& e = proc.engine;
     const float cy0 = cellBounds (0, 0).getCentreY();
-    const float left = x0 - 40, right = x0 + Engine::cols * (tile + gap) - gap + 40;
+    const float left = x0 - 34, right = x0 + Engine::cols * (tile + gap) - gap + 46;
 
     // main path
     g.setColour (theme::path);
     g.drawLine (left, cy0, right, cy0, 2.5f);
     g.setColour (theme::faint);
     g.setFont (theme::font (11.0f, 2));
-    g.drawText ("IN", Rectangle<float> (left - 36, cy0 - 9, 32, 18), Justification::centredRight);
     g.drawText ("OUT", Rectangle<float> (right + 4, cy0 - 9, 36, 18), Justification::centredLeft);
     g.fillEllipse (left - 3, cy0 - 3, 6, 6);
     g.fillEllipse (right - 3, cy0 - 3, 6, 6);
 
-    // parallel rows: split down, run along, merge back up
+    // parallel rows: split down, run along, merge back up; rows with their own input run end to end
     for (int r = 1; r < Engine::rows; ++r)
     {
         int f, l;
         if (! e.rowSpan (r, f, l)) continue;
         const float cy = cellBounds (r, 0).getCentreY();
-        const float sx = splitX (r), mx = mergeX (r);
         Path p;
-        p.startNewSubPath (sx, cy0);
-        p.lineTo (sx, cy - 10); p.quadraticTo (sx, cy, sx + 10, cy);
-        p.lineTo (mx - 10, cy); p.quadraticTo (mx, cy, mx, cy - 10);
-        p.lineTo (mx, cy0);
+        if (e.rowIsIndependent (r))
+        {
+            const float nodeX = cellBounds (r, Engine::cols - 1).getRight() + 22.0f;
+            p.startNewSubPath (left, cy);
+            p.lineTo (nodeX, cy);
+            p.lineTo (right - 10, cy); p.quadraticTo (right, cy, right, cy - 10);
+            p.lineTo (right, cy0);
+        }
+        else
+        {
+            const float sx = splitX (r), mx = mergeX (r);
+            p.startNewSubPath (sx, cy0);
+            p.lineTo (sx, cy - 10); p.quadraticTo (sx, cy, sx + 10, cy);
+            p.lineTo (mx - 10, cy); p.quadraticTo (mx, cy, mx, cy - 10);
+            p.lineTo (mx, cy0);
+        }
         g.setColour (theme::path);
         g.strokePath (p, PathStrokeType (2.5f, PathStrokeType::curved, PathStrokeType::rounded));
     }
@@ -146,13 +183,35 @@ void GridView::paint (Graphics& g)
     {
         int f, l;
         if (! e.rowSpan (r, f, l)) continue;
-        const float mx = mergeX (r), sx = splitX (r);
-        g.setColour (theme::path);
-        g.fillEllipse (sx - 4, cy0 - 4, 8, 8);
+        Point<float> node;
+        if (e.rowIsIndependent (r)) node = { cellBounds (r, Engine::cols - 1).getRight() + 22.0f, cellBounds (r, 0).getCentreY() };
+        else
+        {
+            node = { mergeX (r), cy0 };
+            g.setColour (theme::path);
+            g.fillEllipse (splitX (r) - 4, cy0 - 4, 8, 8);
+        }
         g.setColour (theme::bg);
-        g.fillEllipse (mx - 7, cy0 - 7, 14, 14);
+        g.fillEllipse (Rectangle<float> (14, 14).withCentre (node));
         g.setColour (theme::accent);
-        g.drawEllipse (mx - 6, cy0 - 6, 12, 12, 2.0f);
+        g.drawEllipse (Rectangle<float> (12, 12).withCentre (node), 2.0f);
+    }
+
+    // input chips at the start of each row
+    for (int r = 0; r < Engine::rows; ++r)
+    {
+        int f, l;
+        const bool used = r == 0 || e.rowSpan (r, f, l);
+        const int in = e.rowInput[r].load();
+        if (! used && in == 0 && hoverCell.y != r) continue;
+        auto chip = inputChip (r);
+        g.setColour (in > 0 ? theme::raised : theme::bg);
+        g.fillRoundedRectangle (chip, 8.0f);
+        g.setColour (in > 0 ? theme::line.brighter (0.2f) : theme::line);
+        g.drawRoundedRectangle (chip.reduced (0.5f), 8.0f, 1.0f);
+        g.setColour (in > 0 ? theme::text : theme::faint);
+        g.setFont (theme::font (11.5f, 2));
+        g.drawText (in > 0 ? "IN " + String (in) : String ("SPLIT"), chip, Justification::centred);
     }
 
     // cells
@@ -205,6 +264,8 @@ void GridView::mouseMove (const MouseEvent& e)
 void GridView::mouseDown (const MouseEvent& e)
 {
     dragStarted = false;
+    for (int r = 0; r < Engine::rows; ++r)
+        if (inputChip (r).contains (e.position)) { pressCell = { -1, -1 }; showInputMenu (r); return; }
     const int node = mergeNodeAt (e.getPosition());
     if (node > 0)
     {

@@ -478,20 +478,22 @@ MergePanel::MergePanel (NAMHomeProcessor& p, int r) : row (r)
     mainPan = std::make_unique<ValueKnob> ("Main pan", -1.0f, 1.0f, 0.0f, "pan", [&m] { return m.mainPan.load(); }, set (m.mainPan), theme::accent);
     branchLevel = std::make_unique<ValueKnob> ("Branch level", -40.0f, 6.0f, 0.0f, "dB", [&m] { return m.branchLevel.load(); }, set (m.branchLevel), theme::accent);
     branchPan = std::make_unique<ValueKnob> ("Branch pan", -1.0f, 1.0f, 0.0f, "pan", [&m] { return m.branchPan.load(); }, set (m.branchPan), theme::accent);
-    for (auto* k : { mainLevel.get(), mainPan.get(), branchLevel.get(), branchPan.get() }) addAndMakeVisible (k);
-    setSize (420, 150);
+    independent = p.engine.rowIsIndependent (r);
+    if (independent) { addAndMakeVisible (*branchLevel); addAndMakeVisible (*branchPan); setSize (220, 150); }
+    else { for (auto* k : { mainLevel.get(), mainPan.get(), branchLevel.get(), branchPan.get() }) addAndMakeVisible (k); setSize (420, 150); }
 }
 
 void MergePanel::paint (Graphics& g)
 {
     g.setColour (theme::text);
     g.setFont (theme::font (14.0f, 2));
-    g.drawText ("Merge for row " + String (row + 1), 12, 6, 300, 20, Justification::centredLeft);
+    g.drawText (independent ? "Row " + String (row + 1) + " rig in the mix" : "Merge for row " + String (row + 1), 12, 6, 300, 20, Justification::centredLeft);
 }
 
 void MergePanel::resized()
 {
     auto r = getLocalBounds().reduced (8).withTrimmedTop (24);
+    if (independent) { const int w = r.getWidth() / 2; branchLevel->setBounds (r.removeFromLeft (w)); branchPan->setBounds (r); return; }
     const int w = r.getWidth() / 4;
     for (auto* k : { mainLevel.get(), mainPan.get(), branchLevel.get(), branchPan.get() }) k->setBounds (r.removeFromLeft (w));
 }

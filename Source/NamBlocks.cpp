@@ -3,7 +3,7 @@
 #include "NAM/slimmable.h"
 #include "json.hpp"
 
-using namespace dsp;
+using namespace ndsp;
 
 static void logLine (const juce::String& s)
 {

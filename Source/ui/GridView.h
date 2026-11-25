@@ -42,6 +42,8 @@ public:
     void addBlockAt (Block::Type t, juce::Point<int> cell);
     void removeAt (juce::Point<int> cell);
     juce::Rectangle<float> cellBounds (int r, int c) const;
+    juce::Rectangle<float> inputChip (int r) const;
+    void showInputMenu (int row);
 
 private:
     juce::Point<int> cellAt (juce::Point<int> p) const;
