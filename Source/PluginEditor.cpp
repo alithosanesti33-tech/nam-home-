@@ -189,6 +189,22 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
                                           transposeBtn.getScreenBounds(), nullptr);
     };
     tunerBtn.onClick = [this] { openTuner(); };
+    // spectrum analyzer: off by default, remembers whether you left it open
+    addAndMakeVisible (analyzerBtn);
+    addChildComponent (analyzer);
+    analyzer.sampleRate = [this] { return (float) proc.getSampleRateNow(); };
+    analyzer.selectedBlockId = [this] { auto b = proc.engine.get (grid.selected.y, grid.selected.x); return b != nullptr ? b->id : -1; };
+    analyzerOpen = proc.settings().getBoolValue ("analyzer", false);
+    analyzerShown = analyzerOpen ? 1.0f : 0.0f;
+    analyzerBtn.lit = analyzerOpen;
+    analyzer.setActive (analyzerOpen);
+    analyzerBtn.onClick = [this]
+    {
+        analyzerOpen = ! analyzerOpen;
+        analyzerBtn.lit = analyzerOpen; analyzerBtn.repaint();
+        analyzer.setActive (analyzerOpen);
+        proc.settings().setValue ("analyzer", analyzerOpen);
+    };
     liveTuner = std::make_unique<LiveTuner> (proc);
     liveTuner->onClick = [this] { openTuner(); };
     addChildComponent (*liveTuner);
@@ -333,6 +349,8 @@ void NAMHomeEditor::resized()
     fullBtn.setVisible (! proc.isPlugin());   // Logic owns the plugin window
     if (! proc.isPlugin()) { fullBtn.setBounds (t.removeFromRight (36)); t.removeFromRight (4); }
     tunerBtn.setBounds (t.removeFromRight (36));
+    t.removeFromRight (4);
+    analyzerBtn.setBounds (t.removeFromRight (36));
     if (liveTuner != nullptr && liveTuner->isVisible()) { t.removeFromRight (8); liveTuner->setBounds (t.removeFromRight (170)); }
     t.removeFromRight (16);
     outMeter.setBounds (t.removeFromRight (90).withSizeKeepingCentre (90, 8));
@@ -357,6 +375,12 @@ void NAMHomeEditor::resized()
     }
     sceneBar.setBounds (r.removeFromBottom (42));
     r.removeFromBottom (8);
+    {
+        // the analyzer slides up from the scene bar
+        const int h = roundToInt (jmin (150.0f, r.getHeight() * 0.35f) * analyzerShown);
+        analyzer.setVisible (h > 4);
+        if (h > 4) { analyzer.setBounds (r.removeFromBottom (h)); r.removeFromBottom (8); }
+    }
     grid.setBounds (r);
     toasts.setBounds (getLocalBounds().withTrimmedBottom (drawerOpen ? drawer.getHeight() + 30 : 20));
     if (settingsSheet != nullptr) settingsSheet->setBounds (getLocalBounds());
@@ -440,6 +464,15 @@ void NAMHomeEditor::timerCallback()
     outMeter.setLevel (jmax (proc.engine.outputPeakL.load(), proc.engine.outputPeakR.load()));
     cpu = cpu * 0.9 + proc.engine.getCpuLoad() * 0.1;
     if (drawerOpen) drawer.sync();
+    {
+        const float target = analyzerOpen ? 1.0f : 0.0f;
+        if (std::abs (analyzerShown - target) > 0.001f)
+        {
+            analyzerShown += (target - analyzerShown) * 0.35f;
+            if (std::abs (analyzerShown - target) < 0.02f) analyzerShown = target;
+            resized();
+        }
+    }
     static int tick = 0;
     if (++tick % 10 == 0)
     {

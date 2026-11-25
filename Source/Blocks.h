@@ -41,6 +41,30 @@ struct EngineContext
     std::atomic<int> looperStarts { 0 }, looperStops { 0 };
 };
 
+// Spectrum analyzer taps: the audio thread copies a signal into a ring buffer the screen reads.
+// tap 0 = the analyzer strip, tap 1 = the parametric EQ editor's background.
+struct SpectrumTap
+{
+    enum Where { Output, Input, BeforeBlock, AfterBlock };
+    std::atomic<bool> on { false };
+    std::atomic<int> where { Output }, blockId { -1 };
+    static constexpr int size = 8192;
+    float ring[size] {};
+    std::atomic<int> write { 0 };
+    void push (const float* L, const float* R, int n)
+    {
+        int w = write.load();
+        for (int i = 0; i < n; ++i) { ring[w] = 0.5f * (L[i] + R[i]); w = (w + 1) & (size - 1); }
+        write = w;
+    }
+    void read (float* dest, int n) const
+    {
+        int r = (write.load() - n) & (size - 1);
+        for (int i = 0; i < n; ++i) { dest[i] = ring[r]; r = (r + 1) & (size - 1); }
+    }
+    static SpectrumTap& get (int which) { static SpectrumTap taps[2]; return taps[which & 1]; }
+};
+
 class Block
 {
 public:
@@ -78,7 +102,8 @@ public:
 
     void prepareBlock (double sampleRate, int maxBlockSize);
     bool isPrepared() const { return prepared; }
-    void run (float* L, float* R, int n);           // bypass crossfade + trails
+    void run (float* L, float* R, int n);   // with on/off crossfade and analyzer taps
+    void runInner (float* L, float* R, int n);           // bypass crossfade + trails
 
     virtual void reset() {}
     virtual bool hasTails() const { return false; }

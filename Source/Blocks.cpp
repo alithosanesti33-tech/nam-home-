@@ -100,6 +100,21 @@ void Block::prepareBlock (double sr, int maxBlockSize)
 void Block::run (float* L, float* R, int n)
 {
     if (n > maxBlock) return;
+    for (int t = 0; t < 2; ++t)
+    {
+        auto& tap = SpectrumTap::get (t);
+        if (tap.on.load() && tap.where.load() == SpectrumTap::BeforeBlock && tap.blockId.load() == id) tap.push (L, R, n);
+    }
+    runInner (L, R, n);
+    for (int t = 0; t < 2; ++t)
+    {
+        auto& tap = SpectrumTap::get (t);
+        if (tap.on.load() && tap.where.load() == SpectrumTap::AfterBlock && tap.blockId.load() == id) tap.push (L, R, n);
+    }
+}
+
+void Block::runInner (float* L, float* R, int n)
+{
     const bool en = enabled.load();
     const float target = en ? 1.0f : 0.0f;
     const bool trails = hasTails() && trailsParam != nullptr && trailsParam->on();

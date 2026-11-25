@@ -493,6 +493,11 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         const int input = independent[r] ? rowInput[r].load() : rowInput[0].load();
         cleanFor[r] = cleanBuf[juce::jlimit (1, 2, input) - 1].data();
     }
+    for (int t = 0; t < 2; ++t)
+    {
+        auto& tap = SpectrumTap::get (t);
+        if (tap.on.load() && tap.where.load() == SpectrumTap::Input) tap.push (cleanFor[0], cleanFor[0], n);
+    }
 
     // main row (and any row with its own input) starts from its interface input
     for (int r = 0; r < rows; ++r)
@@ -662,6 +667,11 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     }
     else beatPos = 0;
 
+    for (int t = 0; t < 2; ++t)
+    {
+        auto& tap = SpectrumTap::get (t);
+        if (tap.on.load() && tap.where.load() == SpectrumTap::Output) tap.push (mL, mR, n);
+    }
     if (tunerOn.load() && tunerMute.load()) { std::fill (mL, mL + n, 0.0f); std::fill (mR, mR + n, 0.0f); }
 
     const int numOut = buffer.getNumChannels();

@@ -1,4 +1,5 @@
 #pragma once
+#include "Spectrum.h"
 #include "Widgets.h"
 #include "../BlockTypes.h"
 
@@ -83,6 +84,7 @@ class PeqEditor : public BlockEditor
 {
 public:
     PeqEditor (NAMHomeProcessor& p, std::shared_ptr<Block> b);
+    ~PeqEditor() override;
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -98,6 +100,7 @@ private:
     float yForDb (float db) const;
     float dbForY (float y) const;
     ParametricEQBlock& peq;
+    std::unique_ptr<SpectrumMeter> meter;   // live spectrum behind the curve
     juce::Rectangle<int> graph;
     int dragBand = -1;
     juce::String lastSnapshot;

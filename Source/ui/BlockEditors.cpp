@@ -449,7 +449,16 @@ void CabEditor::sync()
 
 //==============================================================================
 PeqEditor::PeqEditor (NAMHomeProcessor& p, std::shared_ptr<Block> b)
-    : BlockEditor (p, b), peq (dynamic_cast<ParametricEQBlock&> (*b)) {}
+    : BlockEditor (p, b), peq (dynamic_cast<ParametricEQBlock&> (*b))
+{
+    meter = std::make_unique<SpectrumMeter>();
+    auto& tap = SpectrumTap::get (1);
+    tap.where = SpectrumTap::AfterBlock;
+    tap.blockId = b->id;
+    tap.on = true;
+}
+
+PeqEditor::~PeqEditor() { SpectrumTap::get (1).on = false; }
 
 Rectangle<int> PeqEditor::layoutSpecial (Rectangle<int> r)
 {
@@ -478,6 +487,17 @@ void PeqEditor::paint (Graphics& g)
     g.setColour (theme::line);
     for (float f : { 100.0f, 1000.0f, 10000.0f }) g.drawVerticalLine ((int) xForFreq (f), (float) graph.getY(), (float) graph.getBottom());
     for (float d : { -12.0f, 0.0f, 12.0f }) g.drawHorizontalLine ((int) yForDb (d), (float) graph.getX(), (float) graph.getRight());
+    if (meter != nullptr)
+    {
+        // what comes out of this EQ, live (its own scale: 0 dB at the top, -90 at the bottom)
+        const auto a = graph.toFloat().reduced (2.0f);
+        auto toF = [this] (float x) { return freqForX (x); };
+        auto toY = [a] (float db) { return a.getY() + a.getHeight() * jlimit (0.0f, 1.0f, (0.0f - db) / 90.0f); };
+        g.setColour (Colours::white.withAlpha (0.07f));
+        g.fillPath (meter->makePath (a, toF, toY, false, true));
+        g.setColour (Colours::white.withAlpha (0.16f));
+        g.strokePath (meter->makePath (a, toF, toY, false, false), PathStrokeType (1.0f));
+    }
     g.setColour (theme::faint);
     g.setFont (theme::font (11.0f));
     g.drawText ("100", (int) xForFreq (100) + 4, graph.getBottom() - 16, 40, 14, Justification::left);
@@ -558,6 +578,11 @@ void PeqEditor::sync()
     String snap;
     for (auto& prm : peq.params) snap << prm->get() << ",";
     if (snap != lastSnapshot) { lastSnapshot = snap; repaint (graph); }
+    if (meter != nullptr && isShowing())
+    {
+        meter->update (SpectrumTap::get (1), (float) proc.getSampleRateNow());
+        repaint (graph);
+    }
 }
 
 //==============================================================================

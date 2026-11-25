@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/Spectrum.h"
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ui/Look.h"
@@ -100,6 +101,10 @@ private:
     void updateTransposeText();
     Meter inMeter, outMeter;
     IconButton tunerBtn { IconButton::Icon::Tuner, "Tuner (live tuner and mute options inside)" };
+    IconButton analyzerBtn { IconButton::Icon::Spectrum, "Spectrum analyzer" };
+    AnalyzerStrip analyzer;
+    bool analyzerOpen = false;
+    float analyzerShown = 0;   // 0..1, slides up
     std::unique_ptr<LiveTuner> liveTuner;
     std::unique_ptr<TunerPanel> tunerPanel;
     void openTuner();

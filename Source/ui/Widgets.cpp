@@ -390,6 +390,17 @@ void IconButton::paintButton (Graphics& g, bool over, bool down)
             p.addCentredArc (a.getCentreX(), a.getBottom() - 3, 8, 8, 0, -1.3f, 1.3f, false);
             p.startNewSubPath (a.getCentreX(), a.getBottom() - 3); p.lineTo (a.getCentreX() + 3, a.getY() + 3);
             break;
+        case Icon::Spectrum:
+        {
+            // a few bars of a spectrum
+            const float hs[] = { 0.45f, 0.85f, 0.6f, 1.0f, 0.4f };
+            for (int k = 0; k < 5; ++k)
+            {
+                const float x = a.getX() + 1.5f + (float) k * (a.getWidth() - 3.0f) / 4.0f;
+                p.startNewSubPath (x, a.getBottom() - 1.0f); p.lineTo (x, a.getBottom() - 1.0f - hs[k] * (a.getHeight() - 3.0f));
+            }
+            break;
+        }
         case Icon::Power:
             p.addCentredArc (a.getCentreX(), a.getCentreY() + 1, 7, 7, 0, 0.6f, MathConstants<float>::twoPi - 0.6f, true);
             p.startNewSubPath (a.getCentreX(), a.getY()); p.lineTo (a.getCentreX(), a.getCentreY());
