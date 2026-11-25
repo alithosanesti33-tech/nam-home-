@@ -219,6 +219,31 @@ inline float syncToMs (int choice, float bpm)
     return 60000.0f / std::max (20.0f, bpm) * beats[choice];
 }
 
+// Pitch shifter for transposing a guitar: four overlapping Hann-windowed grains read from a delay line
+// at a different speed. Latency is about one grain (~20 ms at 48 kHz); bypassed when the ratio is 1.
+struct PitchShifter
+{
+    void prepare (float sr) { grain = 0.040f * sr; line.setMaxSamples ((int) (grain * 2.5f) + 8); phase = 0; }
+    void clear() { line.clear(); phase = 0; }
+    inline float process (float x, float ratio)
+    {
+        line.push (x);
+        float y = 0;
+        for (int k = 0; k < 4; ++k)
+        {
+            float ph = phase + k * 0.25f;
+            ph -= std::floor (ph);
+            const float w = 0.5f - 0.5f * std::cos (twoPi * ph);     // Hann; the squared windows of four grains sum to 1.5
+            y += line.read (2.0f + ph * grain) * w;
+        }
+        phase += (1.0f - ratio) / grain;
+        phase -= std::floor (phase);
+        return y * 0.8164966f;   // power-normalised: shifted grains add with unrelated phases
+    }
+    DelayLine line;
+    float grain = 1920, phase = 0;
+};
+
 inline float softClip (float x) { return std::tanh (x); }
 inline float fastTanh (float x)
 {

@@ -19,6 +19,7 @@ void Engine::prepare (double sr, int mb)
         for (auto& b : row)
             if (b != nullptr) b->prepareBlock (sr, maxBlock);
     clickSamples = (int) (0.025 * sr);
+    for (auto& s : shifter) s.prepare ((float) sr);
 }
 
 //==============================================================================
@@ -201,6 +202,26 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     float* mL = buf[0][0].data();
     float* mR = buf[0][1].data();
     const float inG = dbToGain (inputGainDb.load());
+    // the tuner hears the real strings, before any transpose
+    if (tunerOn.load())
+    {
+        const int ch = juce::jlimit (0, juce::jmax (0, numIn - 1), tunerInput.load() - 1);
+        int w = tunerWrite.load();
+        for (int i = 0; i < n; ++i) { tunerBuf[w] = numIn > 0 ? buffer.getReadPointer (ch)[i] : 0.0f; w = (w + 1) & (tunerSize - 1); }
+        tunerWrite = w;
+    }
+
+    // transpose: shift each interface input once, before any chain reads it
+    const float semis = (float) transposeSemis.load() + transposeCents.load() * 0.01f;
+    if (std::abs (semis) > 0.001f && numIn > 0)
+    {
+        const float ratio = std::pow (2.0f, semis / 12.0f);
+        for (int ch = 0; ch < juce::jmin (2, numIn); ++ch)
+        {
+            float* d = buffer.getWritePointer (ch);
+            for (int i = 0; i < n; ++i) d[i] = shifter[ch].process (d[i], ratio);
+        }
+    }
     auto inputSample = [&] (int input, int i) -> float
     {
         const int ch = juce::jlimit (0, juce::jmax (0, numIn - 1), input - 1);
@@ -213,14 +234,6 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         inputPeaks[k] = std::max (pk, inputPeaks[k].load() * 0.9f);
     }
     inputPeak = std::max (inputPeaks[0].load(), inputPeaks[1].load());
-
-    if (tunerOn.load())
-    {
-        const int ch = juce::jlimit (0, juce::jmax (0, numIn - 1), tunerInput.load() - 1);
-        int w = tunerWrite.load();
-        for (int i = 0; i < n; ++i) { tunerBuf[w] = numIn > 0 ? buffer.getReadPointer (ch)[i] : 0.0f; w = (w + 1) & (tunerSize - 1); }
-        tunerWrite = w;
-    }
 
     bool independent[rows];
     for (int r = 0; r < rows; ++r) independent[r] = rowIsIndependent (r);
@@ -375,6 +388,8 @@ juce::var Engine::toVar() const
     }
     o->setProperty ("merges", ms);
     o->setProperty ("bpm", getBpm());
+    o->setProperty ("transposeSemis", transposeSemis.load());
+    o->setProperty ("transposeCents", transposeCents.load());
     juce::Array<juce::var> ins;
     for (int r = 0; r < rows; ++r) ins.add (rowInput[r].load());
     o->setProperty ("rowInputs", ins);
@@ -424,6 +439,8 @@ void Engine::fromVar (const juce::var& v)
     if (auto* ins = v.getProperty ("rowInputs", {}).getArray())
         for (int r = 0; r < rows && r < ins->size(); ++r) rowInput[r] = juce::jlimit (r == 0 ? 1 : 0, 2, (int) (*ins)[r]);
     else for (int r = 0; r < rows; ++r) rowInput[r] = r == 0 ? 1 : 0;
+    transposeSemis = juce::jlimit (-12, 12, (int) v.getProperty ("transposeSemis", 0));
+    transposeCents = juce::jlimit (-50.0f, 50.0f, (float) v.getProperty ("transposeCents", 0.0f));
     if (v.hasProperty ("bpm")) setBpm ((float) v.getProperty ("bpm", 120.0f));
 
     {

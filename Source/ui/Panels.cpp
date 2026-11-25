@@ -497,3 +497,52 @@ void MergePanel::resized()
     const int w = r.getWidth() / 4;
     for (auto* k : { mainLevel.get(), mainPan.get(), branchLevel.get(), branchPan.get() }) k->setBounds (r.removeFromLeft (w));
 }
+
+//==============================================================================
+TransposePanel::TransposePanel (NAMHomeProcessor& p, std::function<void()> changed) : proc (p), onChange (std::move (changed))
+{
+    auto& e = proc.engine;
+    semis = std::make_unique<ValueKnob> ("Semitones", -12.0f, 12.0f, 0.0f, "st", [&e] { return (float) e.transposeSemis.load(); },
+                                         [this, &e] (float v) { e.transposeSemis = roundToInt (v); proc.dirty = true; if (onChange) onChange(); }, theme::accent);
+    cents = std::make_unique<ValueKnob> ("Cents", -50.0f, 50.0f, 0.0f, "c", [&e] { return e.transposeCents.load(); },
+                                         [this, &e] (float v) { e.transposeCents = (float) roundToInt (v); proc.dirty = true; if (onChange) onChange(); }, theme::accent);
+    addAndMakeVisible (*semis);
+    addAndMakeVisible (*cents);
+    const std::pair<const char*, int> tunings[] = { { "Standard", 0 }, { "Eb (-1)", -1 }, { "D (-2)", -2 }, { "C# (-3)", -3 }, { "C (-4)", -4 }, { "B (-5)", -5 } };
+    for (auto& t : tunings)
+    {
+        auto* b = presets.add (new juce::TextButton (t.first));
+        const int st = t.second;
+        b->onClick = [this, st]
+        {
+            proc.engine.transposeSemis = st;
+            proc.engine.transposeCents = 0;
+            semis->sync(); cents->sync();
+            proc.dirty = true;
+            if (onChange) onChange();
+        };
+        addAndMakeVisible (b);
+    }
+    setSize (380, 250);
+}
+
+void TransposePanel::paint (juce::Graphics& g)
+{
+    g.setColour (theme::text);
+    g.setFont (theme::font (14.0f, 2));
+    g.drawText ("Transpose (virtual tuning)", 12, 6, 300, 20, juce::Justification::centredLeft);
+    g.setColour (theme::faint);
+    g.setFont (theme::font (11.5f));
+    g.drawFittedText ("Shifts your guitar before the amps and pedals. Adds about 20 ms of delay when on; small shifts sound most natural.",
+                      juce::Rectangle<int> (12, getHeight() - 40, getWidth() - 24, 34), juce::Justification::topLeft, 2);
+}
+
+void TransposePanel::resized()
+{
+    auto r = getLocalBounds().reduced (10).withTrimmedTop (24).withTrimmedBottom (40);
+    auto knobs = r.removeFromLeft (200);
+    semis->setBounds (knobs.removeFromLeft (100).withHeight (110));
+    cents->setBounds (knobs.withHeight (110));
+    r.removeFromLeft (10);
+    for (auto* b : presets) { b->setBounds (r.removeFromTop (26)); r.removeFromTop (4); }
+}

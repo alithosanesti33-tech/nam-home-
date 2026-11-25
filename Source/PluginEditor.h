@@ -86,6 +86,8 @@ private:
     juce::TextButton tapBtn { "Tap" };
     IconButton metroBtn { IconButton::Icon::Metronome, "Metronome" };
     juce::TextButton browseT3k { "Browse TONE3000" };
+    juce::TextButton transposeBtn;
+    void updateTransposeText();
     Meter inMeter, outMeter;
     IconButton tunerBtn { IconButton::Icon::Tuner, "Tuner (live tuner and mute options inside)" };
     std::unique_ptr<LiveTuner> liveTuner;

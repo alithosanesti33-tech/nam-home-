@@ -185,7 +185,7 @@ ValueKnob::ValueKnob (const String& label, float lo, float hi, float def, const 
     slider.setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (Slider::TextBoxBelow, false, 90, 18);
     slider.setColour (Slider::rotarySliderFillColourId, c);
-    slider.setRange (lo, hi, unit == "pan" ? 0.01 : 0.1);
+    slider.setRange (lo, hi, unit == "pan" ? 0.01 : (unit == "st" || unit == "c") ? 1.0 : 0.1);
     slider.setDoubleClickReturnValue (true, def);
     slider.setValue (getter(), dontSendNotification);
     slider.textFromValueFunction = [unit] (double v)
@@ -196,6 +196,8 @@ ValueKnob::ValueKnob (const String& label, float lo, float hi, float def, const 
             return pc == 0 ? String ("C") : pc < 0 ? "L" + String (-pc) : "R" + String (pc);
         }
         if (unit == "%") return String (roundToInt (v)) + "%";
+        if (unit == "st") return (v > 0 ? "+" : "") + String (roundToInt (v)) + " st";
+        if (unit == "c") return (v > 0 ? "+" : "") + String (roundToInt (v)) + " cents";
         return (v > 0.05 ? "+" : "") + String (v, 1) + " " + unit;
     };
     slider.updateText();

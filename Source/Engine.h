@@ -59,6 +59,10 @@ public:
     std::atomic<int> tunerWrite { 0 };
     void readTuner (float* dest, int n) const;   // newest n samples (message thread)
 
+    // ---- transpose (virtual drop tuning) applied to every interface input before the chains
+    std::atomic<int> transposeSemis { 0 };
+    std::atomic<float> transposeCents { 0 };
+
     // ---- meters
     std::atomic<float> inputPeak { 0 }, outputPeakL { 0 }, outputPeakR { 0 };
     double getCpuLoad() const { return loadMeasurer.getLoadAsProportion(); }
@@ -102,6 +106,8 @@ private:
     int maxBlock = 512;
     std::vector<float> buf[rows][2];
     juce::AudioProcessLoadMeasurer loadMeasurer;
+
+    ndsp::PitchShifter shifter[2];
 
     // metronome
     double beatPos = 0;

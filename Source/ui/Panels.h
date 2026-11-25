@@ -98,3 +98,17 @@ private:
     int row;
     bool independent = false;
 };
+
+// Transpose: semitones and cents, plus common drop tunings.
+class TransposePanel : public juce::Component
+{
+public:
+    TransposePanel (NAMHomeProcessor& p, std::function<void()> changed);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+private:
+    NAMHomeProcessor& proc;
+    std::unique_ptr<ValueKnob> semis, cents;
+    juce::OwnedArray<juce::TextButton> presets;
+    std::function<void()> onChange;
+};

@@ -112,7 +112,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     setLookAndFeel (&lnf);
     applyDisplaySettings();
 
-    for (auto* c : std::initializer_list<Component*> { &libraryBtn, &prevBtn, &nextBtn, &presetBtn, &saveBtn, &tempo, &tapBtn, &metroBtn,
+    for (auto* c : std::initializer_list<Component*> { &libraryBtn, &prevBtn, &nextBtn, &presetBtn, &saveBtn, &tempo, &tapBtn, &metroBtn, &transposeBtn,
                                                        &browseT3k, &inMeter, &outMeter, &tunerBtn, &fullBtn, &settingsBtn, &library, &grid })
         addAndMakeVisible (c);
     addChildComponent (drawer);
@@ -144,6 +144,13 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
         });
     };
     fullBtn.onClick = [this] { toggleFullscreen(); };
+    transposeBtn.setColour (TextButton::buttonColourId, theme::raised);
+    transposeBtn.setTooltip ("Transpose: tune your guitar down or up by semitones and cents");
+    transposeBtn.onClick = [this]
+    {
+        CallOutBox::launchAsynchronously (std::make_unique<TransposePanel> (proc, [this] { updateTransposeText(); }),
+                                          transposeBtn.getScreenBounds(), nullptr);
+    };
     tunerBtn.onClick = [this] { openTuner(); };
     liveTuner = std::make_unique<LiveTuner> (proc);
     liveTuner->onClick = [this] { openTuner(); };
@@ -264,6 +271,8 @@ void NAMHomeEditor::resized()
     tapBtn.setBounds (t.removeFromLeft (54));
     t.removeFromLeft (4);
     metroBtn.setBounds (t.removeFromLeft (36));
+    t.removeFromLeft (8);
+    transposeBtn.setBounds (t.removeFromLeft (124));
 
     settingsBtn.setBounds (t.removeFromRight (36));
     t.removeFromRight (4);
@@ -336,8 +345,21 @@ void NAMHomeEditor::closeDrawer()
     resized();
 }
 
+void NAMHomeEditor::updateTransposeText()
+{
+    const int st = proc.engine.transposeSemis.load();
+    const int ct = roundToInt (proc.engine.transposeCents.load());
+    String s = "Transpose";
+    if (st != 0 || ct != 0)
+        s = (st != 0 ? (st > 0 ? "+" : "") + String (st) + " st" : String()) + (st != 0 && ct != 0 ? " " : "") + (ct != 0 ? (ct > 0 ? "+" : "") + String (ct) + "c" : String());
+    transposeBtn.setButtonText (s);
+    transposeBtn.setToggleState (st != 0 || ct != 0, dontSendNotification);
+    presetBtn.setButtonText (presetTitle());
+}
+
 void NAMHomeEditor::refreshAll()
 {
+    updateTransposeText();
     presetBtn.setButtonText (presetTitle());
     metroBtn.lit = proc.engine.metronomeOn.load();
     grid.repaint();
