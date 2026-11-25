@@ -29,6 +29,13 @@ jobs:
           perl -e 'alarm 120; exec @ARGV' "$APP" --check-load "$HOME/NAMCore/example_models/slimmable_container.nam" "$HOME/NAMCore/example_models/A2.nam" "$HOME/NAMCore/example_models/lstm.nam" "$HOME/NAMCore/example_models/wavenet.nam"
       - name: Full-size app icon (every size macOS asks for, Apple template shape)
         run: iconutil -c icns Resources/NAMHome.iconset -o "build/NAMHome_artefacts/Release/Standalone/NAM Home.app/Contents/Resources/Icon.icns"
+      - name: Give the Logic plugin its own identity (the namhome:// TONE3000 link must only open the app)
+        run: |
+          PL="build/NAMHome_artefacts/Release/AU/NAM Home.component/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PL" || true
+          /usr/libexec/PlistBuddy -c "Delete :NSDownloadsFolderUsageDescription" "$PL" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.namhome.app.au" "$PL"
+          /usr/libexec/PlistBuddy -c "Print" "$PL" | grep -E "Identifier|URL" || true
       - name: Sign locally
         run: |
           codesign --force --deep --sign - "build/NAMHome_artefacts/Release/Standalone/NAM Home.app"

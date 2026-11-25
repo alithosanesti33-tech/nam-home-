@@ -18,6 +18,9 @@ if curl -fsL "https://github.com/alithosanesti33-tech/nam-home-/releases/downloa
   rm -rf "$COMP_DIR/NAM Home.component"
   ditto -x -k "$TMP/NAM-Home-AU.zip" "$COMP_DIR/"
   xattr -cr "$COMP_DIR/NAM Home.component"
+  # only the app should answer namhome:// links (TONE3000 sign-in comes back through them)
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$COMP_DIR/NAM Home.component" >/dev/null 2>&1 || true
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
   killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
   echo "Logic plugin installed (Audio Units > NAM Home > NAM Home)."
 fi
