@@ -497,13 +497,16 @@ class FuzzBlock : public Block
 {
 public:
     FuzzBlock();
+    std::vector<StartingPoint> startingPoints() const override;
 protected:
     void prepare (double sr, int maxBlock) override;
     void process (float* L, float* R, int n) override;
 private:
+    float germanium (int c, float x);
     std::unique_ptr<juce::dsp::Oversampling<float>> os;
     ndsp::Biquad inHp[2], muffLp[2], muffHp[2], faceLp[2], bigLow[2], post[2];
-    ndsp::OnePole stageLp[2][2];
+    ndsp::OnePole stageLp[2][2], geIn[2], geOut[2];
+    float geDrift[2] {}, geDriftCoef = 0.001f;
     ndsp::Smoothed level;
     float biasEnv[2] {};
 };
