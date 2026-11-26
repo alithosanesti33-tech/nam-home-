@@ -621,3 +621,44 @@ private:
     AP1 ap[2][4];
     float lamp = 0, ph = 0;
 };
+
+// Talk box (Heil style), whisper mode: your mic (an interface input) is only listened to, never played,
+// so it can't ring with feedback. The block reads your mouth shape from your whisper and shapes the
+// guitar with it. Echo cancellation and a speaker-bleed filter keep your speakers out of the reading.
+class TalkBoxBlock : public Block
+{
+public:
+    TalkBoxBlock();
+    juce::String getSubtitle() const override;
+    static constexpr int numBands = 28;
+protected:
+    void prepare (double sr, int) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    void analyse (float mic, float ref);   // runs at the reduced analysis rate
+    int decim = 3, decimCount = 0, hopCount = 0, delayCount = 0;
+    float aRate = 16000.0f;
+    // anti-alias filters before the analysis rate (mic and speaker reference)
+    ndsp::Biquad micAA[2], refAA[2], micHP;
+    // echo canceller (NLMS) at the analysis rate
+    std::vector<float> aecW, aecX;
+    int aecPos = 0, aecTaps = 768;
+    float refPow = 1.0e-6f, refPeakHold = 0, micPeak = 0;
+    int echoDelay = 0;
+    bool aecLearned = false; float learnTime = 0, micPowSm = 0, resPowSm = 0, floorDb = -60;
+    std::atomic<int> micUsed { 1 };
+    std::vector<float> refHist; int refHistPos = 0;
+    // analysis filter bank (mic after echo cancelling, and the speaker reference for the bleed filter)
+    ndsp::Biquad anMic[numBands], anRef[numBands];
+    float eMic[numBands] {}, eRef[numBands] {}, leak[numBands] {}, target[numBands] {};
+    // the guitar side: Heil voicing, then the same bands with your mouth's gains
+    ndsp::Biquad hp, lp1, lp2, presence, tube, carrier[numBands][2];
+    ndsp::DelayLine tubeLine;
+    float gain[numBands] {}, gainSm[numBands] {}, closed[numBands] {};
+    float open = 0, openSm = 0, whisperDb = -100, makeup = 1.0f;
+    float limEnv = 0;
+    std::atomic<float> micLevelDb { -100.0f };
+    std::atomic<int> status { 0 };   // 0 listening, 1 hearing you, 2 no second input
+};
+

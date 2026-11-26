@@ -48,6 +48,7 @@ target_sources(NAMHome PRIVATE
     Source/Rhythm.cpp
     Source/Measure.cpp
     Source/Instruments.cpp
+    Source/TalkBox.cpp
     Source/NamBlocks.cpp
     Source/Engine.cpp
     Source/Tone3000.cpp

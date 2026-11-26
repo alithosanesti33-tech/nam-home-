@@ -29,6 +29,23 @@ struct Param
     juce::String text() const;
 };
 
+// What actually went to your speakers (mono, after everything), for blocks that need to tell your
+// speakers apart from a mic, like the talk box's echo cancellation. Written by the engine at the end
+// of each audio block; read on the audio thread only.
+struct OutputRing
+{
+    static constexpr int size = 1 << 15;   // ~0.7 s at 48 kHz
+    float ring[size] {};
+    int write = 0;
+    void push (const float* L, const float* R, int n)
+    {
+        for (int i = 0; i < n; ++i) { ring[write] = 0.5f * (L[i] + R[i]); write = (write + 1) & (size - 1); }
+    }
+    // sample written 'ago' samples before the newest one (ago >= 0)
+    float at (int ago) const { return ring[(write - 1 - ago) & (size - 1)]; }
+    static OutputRing& get() { static OutputRing r; return r; }
+};
+
 // Shared musical context (tempo).
 struct EngineContext
 {
@@ -72,7 +89,7 @@ public:
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
         GraphicEQ, ParametricEQ, Delay, Reverb, TriChorus, Utility, PhatTrack, Sax,
-        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, NumTypes
+        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, TalkBox, NumTypes
     };
 
     explicit Block (Type t);
@@ -97,6 +114,8 @@ public:
     int id = 0;
     std::atomic<bool> enabled { true };
     const float* cleanInput = nullptr;    // the dry interface input for this row (set by the engine each block)
+    const float* interfaceIn[2] { nullptr, nullptr };   // interface inputs 1 and 2 (e.g. a mic), set by the engine
+    int interfaceInputs = 0;                            // how many inputs the interface really has
     std::vector<std::unique_ptr<Param>> params;
     Param* param (const juce::String& pid) const;
 

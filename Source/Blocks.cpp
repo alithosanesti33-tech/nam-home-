@@ -265,6 +265,7 @@ juce::String Block::typeName (Type t)
         case Type::Vibe:         return "Vibe";
         case Type::Looper:       return "Looper";
         case Type::Drums:        return "Drums";
+        case Type::TalkBox:      return "Talk box";
         case Type::NumTypes:     break;
     }
     return {};
@@ -344,6 +345,7 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Vibrato:      return std::make_unique<VibratoBlock>();
         case Type::Rotary:       return std::make_unique<RotaryBlock>();
         case Type::Vibe:         return std::make_unique<VibeBlock>();
+        case Type::TalkBox:      return std::make_unique<TalkBoxBlock>();
         case Type::Looper:       return std::make_unique<LooperBlock>();
         case Type::Drums:        return std::make_unique<DrumsBlock>();
         case Type::NumTypes:     break;

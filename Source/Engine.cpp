@@ -579,13 +579,15 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
                 std::copy (mR, mR + n, buf[r][1].begin());
             }
 
-        if (auto* b = plan.cell[0][c]) { b->cleanInput = cleanFor[0]; b->run (mL, mR, n); }
+        if (auto* b = plan.cell[0][c]) { b->cleanInput = cleanFor[0]; b->interfaceIn[0] = cleanBuf[0].data(); b->interfaceIn[1] = cleanBuf[1].data(); b->interfaceInputs = numIn; b->run (mL, mR, n); }
         for (int r = 1; r < rows; ++r)
         {
             if (! plan.active[r] || plan.cell[r][c] == nullptr || continues[r]) continue;
             if (independent[r] || (c >= plan.first[r] && c <= plan.last[r]))
             {
                 plan.cell[r][c]->cleanInput = cleanFor[r];
+                plan.cell[r][c]->interfaceIn[0] = cleanBuf[0].data(); plan.cell[r][c]->interfaceIn[1] = cleanBuf[1].data();
+                plan.cell[r][c]->interfaceInputs = numIn;
                 plan.cell[r][c]->run (buf[r][0].data(), buf[r][1].data(), n);
             }
         }
@@ -615,7 +617,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     {
         if (! continues[r] || ! plan.active[r]) continue;
         for (int c = 0; c < cols; ++c)
-            if (auto* b = plan.cell[r][c]) { b->cleanInput = cleanFor[0]; b->run (mL, mR, n); }
+            if (auto* b = plan.cell[r][c]) { b->cleanInput = cleanFor[0]; b->interfaceIn[0] = cleanBuf[0].data(); b->interfaceIn[1] = cleanBuf[1].data(); b->interfaceInputs = numIn; b->run (mL, mR, n); }
     }
 
     // separate rigs (own input) are mixed in at the end with their level and pan
@@ -767,6 +769,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         if (tap.on.load() && tap.where.load() == SpectrumTap::Output) tap.push (mL, mR, n);
     }
     if (tunerOn.load() && tunerMute.load()) { std::fill (mL, mL + n, 0.0f); std::fill (mR, mR + n, 0.0f); }
+    OutputRing::get().push (mL, mR, n);   // what goes to the speakers (the talk box's echo cancellation)
 
     const int numOut = buffer.getNumChannels();
     if (numOut == 1)
