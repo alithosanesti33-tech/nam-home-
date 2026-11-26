@@ -32,8 +32,8 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addToggle ("aec", "Echo cancel", true);
     addFloat ("bleed2", "Bleed cut", 0, 100, 30, "%", -1, 1);
     currentGroup = "Talk box";
-    addFloat ("clarity2", "Clarity", 0, 100, 85, "%", -1, 1);   // new id: blocks already placed get the stronger default
-    addFloat ("tone", "Tone", 1500, 8000, 4200, "Hz", 3500, 10);
+    addFloat ("clarity3", "Clarity", 0, 100, 70, "%", -1, 1);   // new id: blocks already placed get the new default
+    addFloat ("tone2", "Tone", 1500, 9000, 5500, "Hz", 4500, 10);
     addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
     addFloat ("closed", "Closed mouth", 0, 100, 25, "%", -1, 1);
@@ -128,6 +128,7 @@ void TalkBoxBlock::reset()
         eMic[b] = eRef[b] = leak[b] = 0;
         target[b] = gain[b] = gainSm[b] = closed[b];
     }
+    peakWhisper = 1.0e-9f; bloom = 1.0f;
     open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
     breathHP.reset(); breathHP2.reset(); breathLP.reset();
     for (int b = 0; b < numBands; ++b) lastShaped[b] = 1.0f; limEnv = 0; decimCount = 0;
@@ -249,20 +250,42 @@ void TalkBoxBlock::analyse (float mic, float ref)
     // the mouth opens in ~10 ms and closes over ~80 ms, like a real mouth, never in one step
     openSm += (open > openSm ? 0.1f : 0.0125f) * (open - openSm);
 
-    // mouth shape: each band relative to the average, sharpened by Clarity, then a light smoothing
-    // across neighbouring bands (a mouth's resonances are broad)
+    // mouth shape. A mouth's resonances are broad, so the shape is smoothed over ~5 bands (about an
+    // octave) and keeps a floor of full-range guitar: vowels bloom instead of sounding like a
+    // cocked wah. Clarity sets how far it goes.
     const float mean = total / numBands + 1.0e-12f;
-    const float ex = 0.5f * (0.6f + 2.6f * p (tClarity) * 0.01f);   // 70% = strong, 100% = extreme
-    float a[numBands], rms = 0;
-    for (int b = 0; b < numBands; ++b) { a[b] = std::pow (clean[b] / mean + 1.0e-4f, ex); rms += a[b] * a[b]; }
+    const float clarity = p (tClarity) * 0.01f;
+    const float ex = 0.5f * (0.7f + 1.9f * clarity);
+    float a[numBands], sm[numBands];
+    for (int b = 0; b < numBands; ++b) a[b] = std::pow (clean[b] / mean + 1.0e-4f, ex);
+    static const float kern[5] = { 0.1f, 0.22f, 0.36f, 0.22f, 0.1f };
+    float rms = 0;
+    for (int b = 0; b < numBands; ++b)
+    {
+        float acc = 0, wsum = 0;
+        for (int k = -2; k <= 2; ++k)
+        {
+            const int j = b + k;
+            if (j < 0 || j >= numBands) continue;
+            acc += kern[k + 2] * a[j]; wsum += kern[k + 2];
+        }
+        sm[b] = acc / wsum;
+        rms += sm[b] * sm[b];
+    }
     rms = std::sqrt (rms / numBands) + 1.0e-9f;
+    const float body = 0.3f - 0.22f * clarity;   // full-range guitar kept under the vowel
+
+    // bloom: how open / loud your whisper is right now, against your recent loudest. Opening up
+    // and whispering harder makes it bigger and brighter, like pushing more air through a Heil.
+    peakWhisper = std::max (total, peakWhisper * 0.9995f);
+    const float rel = clamp (total / (peakWhisper + 1.0e-12f), 0.0f, 1.0f);
+    bloom += 0.05f * ((0.45f + 0.55f * std::sqrt (std::sqrt (rel))) - bloom);
+
     const float cl = p (tClosed) * 0.01f * 0.6f;
     for (int b = 0; b < numBands; ++b)
     {
-        const float l = a[std::max (0, b - 1)], r = a[std::min (numBands - 1, b + 1)];
-        const float shaped = (0.15f * l + 0.7f * a[b] + 0.15f * r) / rms;
-        lastShaped[b] = open > 0.5f ? shaped : lastShaped[b];   // when you stop, it closes from your last shape
-        lastShaped[b] = std::min (lastShaped[b], 4.0f);
+        const float shaped = (body + (1.0f - body) * sm[b] / rms) * bloom;
+        lastShaped[b] = open > 0.5f ? std::min (shaped, 3.0f) : lastShaped[b];   // when you stop, it closes from your last shape
         target[b] = openSm * lastShaped[b] + (1.0f - openSm) * closed[b] * cl;
         if (aec && ! aecLearned) target[b] = 0.7f;   // learning: full range, so every frequency gets learned
     }
@@ -281,8 +304,8 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float sens = dbToGain (p (tSens));
     const float drive = p (tDrive) * 0.01f, tubeAmt = p (tTube) * 0.01f;
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
-    lp1.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.6f);
-    lp2.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.6f);
+    lp1.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.65f);
+    lp2.set (Biquad::Type::LowPass, sampleRate, std::min (2.0f * p (tTone), 0.45f * sampleRate), 0.6f);
     const float gC = 1.0f - std::exp (-1.0f / (0.006f * sampleRate));
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz

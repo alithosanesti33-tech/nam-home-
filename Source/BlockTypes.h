@@ -653,6 +653,7 @@ private:
     ndsp::Biquad anMic[numBands], anRef[numBands];
     float eMic[numBands] {}, eRef[numBands] {}, leak[numBands] {}, target[numBands] {};
     float bandC[numBands] {}, lastShaped[numBands] {};
+    float peakWhisper = 1.0e-9f, bloom = 1.0f;
     float holdLeft = 0, likeSm = 0, breathPow = 0, breathDb = -120, breathC = 0.01f;
     ndsp::Biquad breathHP, breathHP2, breathLP;
     // the guitar side: Heil voicing, then the same bands with your mouth's gains
