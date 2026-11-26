@@ -328,17 +328,23 @@ public:
     // horn: 0 alto, 1 soprano; shiftSemis lets tenor/bari borrow the alto recordings
     void setHorn (int h, float shiftSemis) { horn = h; shift = shiftSemis; }
 
-    // kind: 0 attack (play the real attack), 1 legato (sustain to sustain), 2 tongued re-pick.
+    // kind: 0 attack (play the real attack), 1 legato (sustain to sustain), 2 tongued re-pick,
+    // 3 slide hand-over (sustain to sustain, a slightly longer cross-fade).
     // breath: how hard this note is played (0..1). It picks ONE recording (pp, mf or ff) for the note,
     // so two different takes never play on top of each other (that phasing is what sounds synthetic).
     void noteStart (float midi, int kind, float breath)
     {
         auto& bank = SaxSampleBank::get();
         const float src = midi + shift;
-        const float fade = kind == 0 ? 0.003f : (kind == 1 ? 0.025f : 0.008f);
-        if (kind != 1) layer = breath < 0.42f ? 0 : (breath < 0.82f ? 1 : 2);   // legato keeps the same take
+        const float fade = kind == 0 ? 0.003f : (kind == 1 ? 0.025f : (kind == 3 ? 0.035f : 0.008f));
+        if (kind == 0 || kind == 2) layer = breath < 0.42f ? 0 : (breath < 0.82f ? 1 : 2);   // legato keeps the same take
         auto* smp = bank.nearest (horn, layer, src);
         if (smp == nullptr) return;
+        // legato and slide hand-overs: start the new recording at the point of its cycle that lines up
+        // with what is sounding now, so the cross-fade never cancels out (a dip or a hollow "phasey" blip)
+        double startPos = -1;
+        if ((kind == 1 || kind == 3) && cur >= 0 && players[cur].s != nullptr)
+            startPos = alignedStart (players[cur], *smp, midi);
         if (cur >= 0) players[cur].stop (fade * sr);
         // use a free slot, or the quietest one, so a slot that is still fading never gets cut off
         int best = 0; float bestG = 2.0f;
@@ -349,8 +355,36 @@ public:
             if (g < bestG) { bestG = g; best = i; }
         }
         cur = best;
-        players[cur].start (smp, src, kind != 1, fade * sr);
+        players[cur].start (smp, src, kind == 0 || kind == 2, fade * sr);
+        if (startPos >= 0) players[cur].pos = startPos;
     }
+    double alignedStart (const SaxPlayer& from, const SaxSample& to, float pitch) const
+    {
+        const auto& a = *from.s;
+        const double rateA = (a.rate / sr) * std::exp2 ((from.note - shift + from.bend - a.root) / 12.0);
+        const double rateB = (to.rate / sr) * std::exp2 ((pitch - to.root) / 12.0);
+        const double hz = 440.0 * std::exp2 ((pitch - 69.0) / 12.0);
+        const int N = juce::jlimit (32, 1200, (int) (2.0 * sr / hz));          // two cycles at the output rate
+        const int periodB = juce::jlimit (8, 2000, (int) std::ceil (to.rate / (440.0 * std::exp2 ((to.root - 69.0) / 12.0))));
+        float ref[1200];
+        for (int i = 0; i < N; ++i)
+        {
+            double p = from.pos + i * rateA;
+            if (p >= a.loopEnd) p = a.loopStart + (p - a.loopEnd);
+            ref[i] = SaxPlayer::hermite (a.data, p);
+        }
+        const int base = to.sustain;
+        if (base + periodB + N * rateB + 4 >= (double) to.data.size()) return base;
+        double best = base, bestC = -1.0e30;
+        for (int k = 0; k < periodB; ++k)
+        {
+            double c = 0;
+            for (int i = 0; i < N; i += 2) c += ref[i] * SaxPlayer::hermite (to.data, base + k + i * rateB);
+            if (c > bestC) { bestC = c; best = base + k; }
+        }
+        return best;
+    }
+
     void noteStop (float releaseSec) { for (auto& p : players) p.stop (releaseSec * sr); cur = -1; }
     bool sounding() const { for (auto& p : players) if (p.active()) return true; return false; }
 

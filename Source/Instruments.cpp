@@ -405,6 +405,15 @@ void SaxBlock::process (float* L, float* R, int n)
             samplerNote = target;
             noteTime = 0;
         }
+        // slides and big bends: the guitar's pitch moves smoothly, so no new note is detected. Instead of
+        // stretching one recording over the whole slide (which sounds like a chipmunk), hand over to the
+        // recording nearest your current pitch every time you have moved more than ~half a semitone, with
+        // a smooth cross-fade, so every point of the slide is a real recording bent by less than that.
+        if (sounding && ! pending && ! releasing && std::abs (played + fold - samplerNote) > 0.55f)
+        {
+            sampler.noteStart (played + fold, 3, breath);
+            samplerNote = played + fold;
+        }
         if (f.released && sounding)
         {
             releasing = true; sounding = false; pending = false;
