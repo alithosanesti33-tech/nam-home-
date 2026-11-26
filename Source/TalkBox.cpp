@@ -42,7 +42,7 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     // the low end: the horn and tube still push the low notes through your mouth, and a mic right at
     // your lips adds proximity bass, so the bottom isn't shaped away
     currentGroup = "Talk box";
-    addFloat ("body", "Body", 0, 100, 60, "%", -1, 1);
+    addFloat ("body2", "Body", 0, 100, 40, "%", -1, 1);
     // the mouth opening, like a real talk box: dark and muffled on "w"/"oo", blooming up into the
     // treble as you spread your mouth into "ahh"/"eee"
     addFloat ("opening", "Mouth opening", 0, 100, 70, "%", -1, 1);
@@ -71,8 +71,8 @@ void TalkBoxBlock::prepare (double sr, int)
     for (auto& f : micAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
     for (auto& f : refAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
     micHP.set (Biquad::Type::HighPass, (float) sr, 100.0f, 0.707f);
-    breathHP.set (Biquad::Type::HighPass, aRate, 5000.0f, 0.707f);
-    breathHP2.set (Biquad::Type::HighPass, aRate, 5000.0f, 0.707f);
+    breathHP.set (Biquad::Type::HighPass, aRate, std::min (6200.0f, 0.4f * aRate), 0.707f);
+    breathHP2.set (Biquad::Type::HighPass, aRate, std::min (6200.0f, 0.4f * aRate), 0.707f);
     breathLP.set (Biquad::Type::LowPass, aRate, 0.45f * aRate, 0.707f);
     refBHP = breathHP; refBHP2 = breathHP2; refBLP = breathLP;
     breathC = 1.0f - std::exp (-1.0f / (0.01f * aRate));
@@ -98,8 +98,8 @@ void TalkBoxBlock::prepare (double sr, int)
     hp.set (Biquad::Type::HighPass, (float) sr, 70.0f, 0.707f);
     bodyLP.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
     bodyLP2.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
-    proximity.set (Biquad::Type::LowShelf, (float) sr, 200.0f, 0.7f, 4.0f);
-    presence.set (Biquad::Type::Peak, (float) sr, 2400.0f, 1.0f, 4.0f);
+    proximity.set (Biquad::Type::LowShelf, (float) sr, 200.0f, 0.7f, 2.0f);
+    presence.set (Biquad::Type::Peak, (float) sr, 2800.0f, 0.9f, 6.0f);   // the Heil horn's high-mid bite
     tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
     tubeLine.setMaxSamples ((int) (0.02 * sr));
 
@@ -357,7 +357,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float drive = p (tDrive) * 0.01f, tubeAmt = p (tTube) * 0.01f;
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
     lp1.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.65f);
-    lp2.set (Biquad::Type::LowPass, sampleRate, std::min (2.0f * p (tTone), 0.45f * sampleRate), 0.6f);
+    lp2.set (Biquad::Type::LowPass, sampleRate, std::min (1.25f * p (tTone), 0.45f * sampleRate), 0.7f);   // steep above the Tone, like a Heil
     const float gC = 1.0f - std::exp (-1.0f / (0.006f * sampleRate));
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
@@ -402,7 +402,8 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             {
                 sweepCount = 32;
                 const float top = p (tTone);
-                const float fc = 550.0f * std::exp (std::log (std::max (600.0f, top) / 550.0f) * sweepSm);
+                // closed ~900 Hz, an "ah" already ~2.5-3 kHz (the high mids stay: that's where the words are)
+                const float fc = 900.0f * std::exp (std::log (std::max (1000.0f, top) / 900.0f) * std::pow (sweepSm, 0.6f));
                 sweepLP.set (Biquad::Type::LowPass, sampleRate, std::min (fc, 0.45f * sampleRate), 1.1f);
                 sweepPeak.set (Biquad::Type::LowPass, sampleRate, std::min (fc, 0.45f * sampleRate), 0.6f);
             }
