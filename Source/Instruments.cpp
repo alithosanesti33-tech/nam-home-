@@ -275,7 +275,7 @@ void SaxBlock::reset()
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
     breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
-    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0;
+    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f;
 }
 
 void SaxBlock::process (float* L, float* R, int n)
@@ -399,8 +399,11 @@ void SaxBlock::process (float* L, float* R, int n)
             const float target = played + newFold;
             glideOff = lastPitch - target;
             fold = newFold;
-            voice.keyClick (0.8f);
-            dipEnv = 0.18f;
+            // a single new note gets a fingering click and a tiny breath dip; notes passing quickly one
+            // after another (a finger slide along the frets, a fast run) flow without them
+            const bool sliding = sinceChange < 0.12f;
+            if (! sliding) { voice.keyClick (0.8f); dipEnv = 0.18f; }
+            sinceChange = 0;
             sampler.noteStart (target, 1, breath);
             samplerNote = target;
             noteTime = 0;
@@ -441,6 +444,7 @@ void SaxBlock::process (float* L, float* R, int n)
 
         // the sax's own vibrato
         noteTime += dtS;
+        sinceChange += dtS;
         float vd = 0.0f;
         switch (vibMode)
         {

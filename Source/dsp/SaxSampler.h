@@ -389,7 +389,7 @@ public:
     bool sounding() const { for (auto& p : players) if (p.active()) return true; return false; }
 
     // bend: semitones away from the current note (your bends and vibrato, scoops, falls, glides).
-    // breath 0..1 sets the level and, below the take's own dynamic, closes the tone like a real horn.
+    // breath 0..1 sets the level only.
     inline float tick (float bend, float breath)
     {
         const float b = clamp (breath, 0.0f, 1.2f);
@@ -403,12 +403,8 @@ public:
             const double rate = (p.s->rate / sr) * std::exp2 ((p.note - shift + p.bend - p.s->root) / 12.0);
             y += p.tick (rate);
         }
-        // softer than the take = darker, the way blowing softer closes a sax's tone
-        static const float ref[3] = { 0.3f, 0.65f, 0.95f };
-        const float r = clamp (b / ref[layer], 0.05f, 1.0f);
-        const float fc = clamp (18000.0f * std::pow (r, 2.2f), 900.0f, 18000.0f);
-        if (--fcCount <= 0 && std::abs (fc - lastFc) > 20.0f) { tone.set (Biquad::Type::LowPass, sr, fc, 0.6f); lastFc = fc; fcCount = 32; }
-        y = tone.process (y);
+        // no filter sweep here: the recording's own tone is kept as it is. (A filter that followed the
+        // guitar's decay closed on every note like a synth's filter envelope.)
         const float level = std::pow (clamp (b, 0.0f, 1.2f), 0.7f) * (0.55f + 0.2f * layer);
         return y * level;
     }
