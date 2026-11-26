@@ -315,7 +315,7 @@ OctaveBlock::OctaveBlock() : Block (Type::Octave)
     auto& det = addFloat ("detune", "Detune", 0, 100, 0, "%", -1, 1);
     auto& atk = addFloat ("attack", "Attack", 0, 100, 0, "%", -1, 1);
     addFloat ("filter", "Filter", 300, 12000, 12000, "Hz", 2500, 1);
-    auto& fq = addFloat ("filterQ", "Filter resonance", 0, 100, 0, "%", -1, 1);
+    auto& fq = addFloat ("filterQ", "Resonance", 0, 100, 0, "%", -1, 1);
     addChoice ("engine", "Tracking", { "Single notes (cleanest)", "Chords (polyphonic)" }, 0);
     auto pog2 = [] (const Block& b) { return b.params[0]->getInt() == 1; };
     sub2.visible = up2.visible = det.visible = atk.visible = fq.visible = pog2;
@@ -1411,7 +1411,7 @@ RotaryBlock::RotaryBlock() : Block (Type::Rotary)
     addFloat ("rise", "Rise time", 0.2f, 5, 1.4f, "s", 1.2f, 0.01f);
     addFloat ("slow", "Slow speed", 0.3f, 2, 0.8f, "Hz", -1, 0.01f);
     addFloat ("fastHz", "Fast speed", 4, 9, 6.7f, "Hz", -1, 0.01f);
-    addFloat ("balance", "Balance (bass/horn)", -100, 100, 0, "%", -1, 1);
+    addFloat ("balance", "Bass / horn", -100, 100, 0, "%", -1, 1);
     addFloat ("drive", "Overdrive", 0, 100, 15, "%", -1, 1);
     addFloat ("effect", "Effect level", 0, 100, 100, "%", -1, 1);
     addFloat ("direct", "Direct level", 0, 100, 0, "%", -1, 1);

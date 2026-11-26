@@ -27,16 +27,16 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     // set-and-forget: the mic is whichever input your guitar isn't on, and the whisper gate sets its
     // own level from your room (how much the speakers leave behind), so you can just play
     addChoice ("mic", "Mic input", { "Auto (the other input)", "Input 1", "Input 2" }, 0);
-    addFloat ("sens", "Mic sensitivity", -12, 36, 12, "dB", -1, 0.5f);
-    addFloat ("gate", "Whisper threshold (above the room)", 3, 24, 9, "dB", -1, 0.5f);
-    addToggle ("aec", "Echo cancel (speakers)", true);
-    addFloat ("bleed", "Speaker bleed filter", 0, 100, 70, "%", -1, 1);
+    addFloat ("sens", "Mic level", -12, 36, 12, "dB", -1, 0.5f);
+    addFloat ("gate", "Gate", 3, 24, 9, "dB", -1, 0.5f);
+    addToggle ("aec", "Echo cancel", true);
+    addFloat ("bleed2", "Bleed cut", 0, 100, 30, "%", -1, 1);
     currentGroup = "Talk box";
     addFloat ("clarity", "Clarity", 0, 100, 70, "%", -1, 1);
-    addFloat ("tone", "Tone (Heil low-pass)", 1500, 8000, 4200, "Hz", 3500, 10);
-    addFloat ("drive", "Drive (horn breakup)", 0, 100, 25, "%", -1, 1);
+    addFloat ("tone", "Tone", 1500, 8000, 4200, "Hz", 3500, 10);
+    addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
-    addFloat ("closed", "Closed-mouth level", 0, 100, 25, "%", -1, 1);
+    addFloat ("closed", "Closed mouth", 0, 100, 25, "%", -1, 1);
     addFloat ("level", "Level", -24, 12, 0, "dB", -1, 0.1f);
     addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1);
 }
@@ -201,7 +201,9 @@ void TalkBoxBlock::analyse (float mic, float ref)
     hopCount = 0;
 
     // bleed filter: whatever in a band still follows the speakers is taken out
-    const float bleedK = 2.5f * p (tBleed) * 0.01f;
+    // gentle: it only turns down what follows the speakers, never cuts a band out completely
+    // (cutting bands to nothing is what made it choppy)
+    const float bleedK = 1.5f * p (tBleed) * 0.01f;
     float clean[numBands], total = 0;
     for (int b = 0; b < numBands; ++b)
     {
@@ -210,7 +212,7 @@ void TalkBoxBlock::analyse (float mic, float ref)
             const float q = eMic[b] / eRef[b];
             leak[b] += (q < leak[b] ? 0.025f : 0.0004f) * (q - leak[b]);   // the quietest the mic gets per unit of speaker
         }
-        clean[b] = std::max (0.0f, eMic[b] - bleedK * leak[b] * eRef[b]);
+        clean[b] = std::max (0.25f * eMic[b], eMic[b] - bleedK * leak[b] * eRef[b]);
         total += clean[b];
     }
 

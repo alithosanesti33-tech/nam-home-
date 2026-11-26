@@ -657,7 +657,7 @@ ReverbBlock::ReverbBlock() : Block (Type::Reverb)
     addFloat ("decay", "Decay", 0.2f, 20, 2.5f, "s", 2.5f, 0.01f);
     addFloat ("predelay", "Pre-delay", 0, 250, 15, "ms", 50, 1);
     addFloat ("size", "Size", 0, 100, 60, "%", -1, 1);
-    addFloat ("highCut", "Tone (high cut)", 1000, 16000, 7000, "Hz", 5000, 1);
+    addFloat ("highCut", "High cut", 1000, 16000, 7000, "Hz", 5000, 1);
     addFloat ("lowCut", "Low cut", 20, 1000, 100, "Hz", 150, 1);
     addFloat ("mix", "Mix", 0, 100, 25, "%", -1, 1);
     auto& md = addFloat ("mod", "Modulation", 0, 100, 30, "%", -1, 1);
