@@ -161,7 +161,7 @@ namespace
         sGate, sSens, sDynamics, sSustain, sAttack, sLegato, sTongue,
         sBright, sBreath, sGrowl, sSubtone, sBody, sClicks,
         sScoop, sFall, sPitchMode, sGuitarVib,
-        sVibMode, sVibAmount, sVibDepth, sVibRate, sVibDelay, sSound
+        sVibMode, sVibAmount, sVibDepth, sVibRate, sVibDelay, sSound, sLand
     };
     const int saxDefaultOctave[4] = { 2, 2, 1, 1 };   // index into { -2, -1, 0, +1, +2 }
 }
@@ -205,6 +205,10 @@ SaxBlock::SaxBlock() : Block (Type::Sax)
     currentGroup = "Saxophone";
     // index 29: real recordings (alto and soprano; tenor and bari borrow the alto) or the modeled horn
     addChoice ("sound", "Sound", { "Recorded", "Modeled" }, 0);
+    currentGroup = "Expression";
+    // index 30: settle onto the exact centre of the note once you land (vibrato and bends stay yours)
+    addToggle ("land", "In-tune landings", true);
+    currentGroup = "Saxophone";
     currentGroup = {};
     ndsp::SaxSampleBank::get().requestLoad();
 }
@@ -275,7 +279,7 @@ void SaxBlock::reset()
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
     breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
-    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f; slideHold = 0; slidePitch = 60.0f;
+    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f; slideHold = 0; slidePitch = 60.0f; landAvg = landPrev = 60.0f; landSpeed = landCorr = 0;
 }
 
 void SaxBlock::process (float* L, float* R, int n)
@@ -355,6 +359,8 @@ void SaxBlock::process (float* L, float* R, int n)
     };
 
     const float slideC = coef (0.06f);
+    const bool land = p (sLand) > 0.5f;
+    const float landAvgC = coef (0.04f), landSpeedC = coef (0.03f), landC = coef (0.03f), landFastC = coef (0.015f);
     float lastHz = 0;
     for (int i = 0; i < n; ++i)
     {
@@ -363,8 +369,26 @@ void SaxBlock::process (float* L, float* R, int n)
         const auto f = tracker.process (detect);
 
         // where the guitar is: note centre plus as much of your own vibrato/bends as you want
-        const float centre = snap ? std::round (f.centre) : f.centre;
-        const float played = centre + follow * (f.midi - f.centre) + octave;
+        // In-tune landings. Your pitch averaged over ~40 ms (vibrato mostly averaged out) tells where you
+        // are and how fast you are moving:
+        //  * moving fast (a slide, a note change): follow you freely, no correction
+        //  * settled on a note: ease onto its exact centre within ~60 ms, like a player locking in
+        //  * in between (vibrato, slow deliberate bends): keep the last correction as it is, so vibrato
+        //    and bends are never flattened onto notes
+        // A note held a quarter-tone or more away is treated as intentional and left alone.
+        landAvg += landAvgC * (f.midi - landAvg);
+        landSpeed += landSpeedC * (std::abs (landAvg - landPrev) * rate - landSpeed);
+        landPrev = landAvg;
+        {
+            const float c = std::round (landAvg) - landAvg, ac = std::abs (c);
+            const float want = ac < 0.25f ? c : (ac < 0.35f ? c * (0.35f - ac) / 0.1f : 0.0f);
+            if (! land || ! f.open || landSpeed > 10.0f) landCorr += landFastC * (0.0f - landCorr);
+            else if (landSpeed < 3.0f)                      landCorr += landC * (want - landCorr);
+        }
+        // Snap to notes: the note nearest your averaged pitch, on time (the slow note centre made it late)
+        const float centre = snap ? std::round (landAvg) : f.centre;
+        const float played = (snap ? centre + follow * (f.midi - landAvg)
+                                   : centre + follow * (f.midi - f.centre) + landCorr) + octave;
 
         if (f.attack || (f.repick && sounding))
         {
@@ -383,7 +407,7 @@ void SaxBlock::process (float* L, float* R, int n)
                 noteVel = juce::jmax (f.velocity, f.level);
                 if (fresh || std::abs (played + fold - lastPitch) > 0.5f) fold = foldFor (played);
                 const float target = played + fold;
-                if (fresh) { scoopOff = -scoopSemis * (0.6f + 0.4f * noteVel); glideOff = 0; breath = 0.0f; }
+                if (fresh) { scoopOff = -scoopSemis * (0.6f + 0.4f * noteVel); glideOff = 0; breath = 0.0f; landAvg = landPrev = f.midi; landSpeed = 0; }
                 else if (std::abs (target - lastPitch) > 0.5f) { glideOff = 0; scoopOff = -scoopSemis * 0.4f; voice.keyClick (0.6f); }
                 sampler.noteStart (target, fresh ? 0 : (tongueOn ? 2 : 1), breathFor (noteVel, f.level));
                 samplerNote = slidePitch = target;
