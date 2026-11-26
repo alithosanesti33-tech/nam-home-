@@ -275,7 +275,7 @@ void SaxBlock::reset()
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
     breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
-    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; candAge = -1; curCentre = candCentre = 60.0f;
+    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0;
 }
 
 void SaxBlock::process (float* L, float* R, int n)
@@ -367,11 +367,7 @@ void SaxBlock::process (float* L, float* R, int n)
         // the tracker's tiny pitch flutter is smoothed away (it is what made the horn warble like a synth);
         // your real vibrato and bends are slow enough to pass straight through
         bendSm += bendSmC * ((f.midi - f.centre) - bendSm);
-        // while a note change is being confirmed, the horn stays exactly on the old note
-        const bool holdOld = sounding && ! pending && (candAge >= 0 || f.noteChange);
-        if (! holdOld) heldCentre = centre;
-        const float playedNew = centre + follow * bendSm + octave;
-        const float played = (holdOld ? heldCentre : centre) + follow * bendSm + octave;
+        const float played = centre + follow * bendSm + octave;
 
         if (f.attack || (f.repick && sounding))
         {
@@ -394,45 +390,28 @@ void SaxBlock::process (float* L, float* R, int n)
                 else if (std::abs (target - lastPitch) > 0.5f) { glideOff = 0; scoopOff = -scoopSemis * 0.4f; voice.keyClick (0.6f); }
                 sampler.noteStart (target, fresh ? 0 : (tongueOn ? 2 : 1), breathFor (noteVel, f.level));
                 samplerNote = target;
-                curCentre = std::round (f.centre); candAge = -1;
                 bite = atk * (0.15f + 0.25f * noteVel);
                 sounding = true; releasing = false; fallOff = 0; fallTarget = 0;
                 noteTime = 0;
             }
             // no timeout: a note that is slow to detect still plays the moment its pitch is known
         }
-        // legato note changes are confirmed before the horn moves: a tracking flicker (a wrong note or an
-        // octave/harmonic jump for a few ms) is ignored instead of playing a blip. Real changes wait ~14 ms,
-        // jumps of an octave, octave+fifth or two octaves (the usual tracking mistakes) ~45 ms.
-        if (f.noteChange && sounding && ! pending) { candCentre = std::round (f.centre); candAge = 0; }
-        if (candAge >= 0 && sounding && ! pending)
+        if (f.noteChange && sounding && ! pending)
         {
-            const float c = std::round (f.centre);
-            if (c == curCentre) candAge = -1;
-            else
-            {
-                if (c != candCentre) { candCentre = c; candAge = 0; }
-                const float jump = std::abs (c - curCentre);
-                const bool suspicious = jump == 12.0f || jump == 19.0f || jump == 24.0f;
-                if (++candAge >= (int) (rate * (suspicious ? 0.045f : 0.014f)))
-                {
-                    // legato: glide from where the horn is, with a fingering click and a tiny breath dip
-                    const float newFold = foldFor (playedNew);
-                    const float target = playedNew + newFold;
-                    glideOff = lastPitch - target;
-                    fold = newFold;
-                    voice.keyClick (0.8f);
-                    dipEnv = 0.18f;
-                    sampler.noteStart (target, 1, breath);
-                    samplerNote = target;
-                    curCentre = c; candAge = -1;
-                    noteTime = 0;
-                }
-            }
+            // legato: glide from where the horn is, with a fingering click and a tiny breath dip
+            const float newFold = foldFor (played);
+            const float target = played + newFold;
+            glideOff = lastPitch - target;
+            fold = newFold;
+            voice.keyClick (0.8f);
+            dipEnv = 0.18f;
+            sampler.noteStart (target, 1, breath);
+            samplerNote = target;
+            noteTime = 0;
         }
         if (f.released && sounding)
         {
-            releasing = true; sounding = false; pending = false; candAge = -1;
+            releasing = true; sounding = false; pending = false;
             fallTarget = -fallSemis;
             sampler.noteStop (fallSemis > 0.01f ? 0.25f : 0.08f);
         }
