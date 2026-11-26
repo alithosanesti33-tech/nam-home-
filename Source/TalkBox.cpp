@@ -16,7 +16,7 @@ using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix };
+    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix, tBody };
     constexpr float bandLo = 150.0f, bandHi = 6000.0f;
     inline float bandFreq (int b) { return bandLo * std::pow (bandHi / bandLo, (float) b / (float) (TalkBoxBlock::numBands - 1)); }
 }
@@ -39,6 +39,10 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addFloat ("closed", "Closed mouth", 0, 100, 25, "%", -1, 1);
     addFloat ("level", "Level", -24, 12, 0, "dB", -1, 0.1f);
     addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1);
+    // the low end: the horn and tube still push the low notes through your mouth, and a mic right at
+    // your lips adds proximity bass, so the bottom isn't shaped away
+    currentGroup = "Talk box";
+    addFloat ("body", "Body", 0, 100, 60, "%", -1, 1);
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
@@ -87,7 +91,10 @@ void TalkBoxBlock::prepare (double sr, int)
         const float f = bandFreq (b);
         closed[b] = f < 600.0f ? 1.0f : std::pow (600.0f / f, 2.0f);
     }
-    hp.set (Biquad::Type::HighPass, (float) sr, 160.0f, 0.707f);
+    hp.set (Biquad::Type::HighPass, (float) sr, 70.0f, 0.707f);
+    bodyLP.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
+    bodyLP2.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
+    proximity.set (Biquad::Type::LowShelf, (float) sr, 200.0f, 0.7f, 4.0f);
     presence.set (Biquad::Type::Peak, (float) sr, 2400.0f, 1.0f, 4.0f);
     tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
     tubeLine.setMaxSamples ((int) (0.02 * sr));
@@ -116,6 +123,7 @@ void TalkBoxBlock::reset()
 {
     for (auto& f : micAA) f.reset();
     for (auto& f : refAA) f.reset();
+    bodyLP.reset(); bodyLP2.reset(); proximity.reset();
     micHP.reset(); hp.reset(); lp1.reset(); lp2.reset(); presence.reset(); tube.reset(); tubeLine.clear();
     std::fill (aecW.begin(), aecW.end(), 0.0f);
     std::fill (aecX.begin(), aecX.end(), 0.0f);
@@ -317,6 +325,8 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
     const float lmC = 1.0f / (0.7f * sampleRate);
+    const float bodyAmt = p (tBody) * 0.01f;
+    const float openSmA = openSm;
     auto& ring = OutputRing::get();
 
     for (int i = 0; i < n; ++i)
@@ -342,6 +352,9 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             y += gainSm[b] * carrier[b][1].process (carrier[b][0].process (v));
         }
         y *= makeup;
+        // body: the low end under the vowels, and the close mic's proximity bass
+        y += bodyAmt * 1.6f * (0.55f + 0.45f * openSmA) * bodyLP2.process (bodyLP.process (v));
+        y = proximity.process (y);
         // level match (slow, ~0.7 s): while your mouth is open, the talk box is as loud as the
         // guitar going into it, so switching it on never drops your volume
         if (openSm > 0.5f)
