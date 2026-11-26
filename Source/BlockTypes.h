@@ -652,7 +652,7 @@ private:
     // analysis filter bank (mic after echo cancelling, and the speaker reference for the bleed filter)
     ndsp::Biquad anMic[numBands], anRef[numBands];
     float eMic[numBands] {}, eRef[numBands] {}, leak[numBands] {}, target[numBands] {};
-    float bandC[numBands] {}, lastShaped[numBands] {};
+    float bandC[numBands] {}, lastShaped[numBands] {}, longTerm[numBands] {};
     float peakWhisper = 1.0e-9f, bloom = 1.0f, dryE = 0, wetE = 0, levelComp = 1.0f;
     float holdLeft = 0, likeSm = 0, breathPow = 0, breathDb = -120, breathC = 0.01f;
     ndsp::Biquad breathHP, breathHP2, breathLP, refBHP, refBHP2, refBLP;
@@ -660,6 +660,8 @@ private:
     // the guitar side: Heil voicing, then the same bands with your mouth's gains
     ndsp::Biquad hp, lp1, lp2, presence, tube, carrier[numBands][2], bodyLP, bodyLP2, proximity, sweepPeak, sweepLP;
     float sweepPos = 0, sweepSm = 0; int sweepCount = 0;
+    ndsp::Biquad tmDryLo, tmDryHi, tmWetLo, tmWetHi, tmLoShelf, tmHiShelf;
+    float tmE[6] {}, tmLoDb = 0, tmHiDb = 0; int tmCount = 0;
     ndsp::DelayLine tubeLine;
     float gain[numBands] {}, gainSm[numBands] {}, closed[numBands] {};
     float open = 0, openSm = 0, whisperDb = -100, makeup = 1.0f;

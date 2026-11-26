@@ -32,7 +32,7 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addToggle ("aec3", "Echo cancel", true);
     addFloat ("bleed3", "Bleed cut", 0, 100, 0, "%", -1, 1);
     currentGroup = "Talk box";
-    addFloat ("clarity3", "Clarity", 0, 100, 70, "%", -1, 1);   // new id: blocks already placed get the new default
+    addFloat ("clarity4", "Clarity", 0, 100, 85, "%", -1, 1);   // new id: blocks already placed get the new default
     addFloat ("tone2", "Tone", 1500, 9000, 5500, "Hz", 4500, 10);
     addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
@@ -45,7 +45,7 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addFloat ("body2", "Body", 0, 100, 40, "%", -1, 1);
     // the mouth opening, like a real talk box: dark and muffled on "w"/"oo", blooming up into the
     // treble as you spread your mouth into "ahh"/"eee"
-    addFloat ("opening", "Mouth opening", 0, 100, 70, "%", -1, 1);
+    addFloat ("opening2", "Mouth opening", 0, 100, 50, "%", -1, 1);
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
@@ -99,7 +99,9 @@ void TalkBoxBlock::prepare (double sr, int)
     bodyLP.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
     bodyLP2.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
     proximity.set (Biquad::Type::LowShelf, (float) sr, 200.0f, 0.7f, 2.0f);
-    presence.set (Biquad::Type::Peak, (float) sr, 2800.0f, 0.9f, 6.0f);   // the Heil horn's high-mid bite
+    for (auto* f : { &tmDryLo, &tmWetLo }) f->set (Biquad::Type::LowPass, (float) sr, 350.0f, 0.7f);
+    for (auto* f : { &tmDryHi, &tmWetHi }) f->set (Biquad::Type::BandPass, (float) sr, 2600.0f, 0.8f);
+    presence.set (Biquad::Type::Peak, (float) sr, 2800.0f, 0.9f, 1.5f);   // a touch of Heil horn; the tone stays even with your guitar
     tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
     tubeLine.setMaxSamples ((int) (0.02 * sr));
 
@@ -129,6 +131,8 @@ void TalkBoxBlock::reset()
     for (auto& f : refAA) f.reset();
     bodyLP.reset(); bodyLP2.reset(); proximity.reset(); sweepPeak.reset(); sweepLP.reset();
     sweepPos = sweepSm = 0; sweepCount = 0;
+    tmLoDb = 0; tmHiDb = 0; tmCount = 0; for (auto& e : tmE) e = 0;
+    tmDryLo.reset(); tmWetLo.reset(); tmDryHi.reset(); tmWetHi.reset(); tmLoShelf.reset(); tmHiShelf.reset();
     micHP.reset(); hp.reset(); lp1.reset(); lp2.reset(); presence.reset(); tube.reset(); tubeLine.clear();
     std::fill (aecW.begin(), aecW.end(), 0.0f);
     std::fill (aecX.begin(), aecX.end(), 0.0f);
@@ -145,7 +149,7 @@ void TalkBoxBlock::reset()
     open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
     breathHP.reset(); breathHP2.reset(); breathLP.reset(); refBHP.reset(); refBHP2.reset(); refBLP.reset();
     refBreathPow = 0; leakB = 0;
-    for (int b = 0; b < numBands; ++b) lastShaped[b] = 1.0f; limEnv = 0; decimCount = 0;
+    for (int b = 0; b < numBands; ++b) lastShaped[b] = longTerm[b] = 1.0f; limEnv = 0; decimCount = 0;
 }
 
 // one analysis-rate sample: echo cancel, bands, and every ~2 ms a new mouth shape
@@ -336,8 +340,14 @@ void TalkBoxBlock::analyse (float mic, float ref)
     const float cl = p (tClosed) * 0.01f * 0.6f;
     for (int b = 0; b < numBands; ++b)
     {
-        const float shaped = (body + (1.0f - body) * sm[b] / rms) * bloom;
-        lastShaped[b] = open > 0.5f ? std::min (shaped, 3.0f) : lastShaped[b];   // when you stop, it closes from your last shape
+        const float shaped = body + (1.0f - body) * sm[b] / rms;
+        if (open > 0.5f)
+        {
+            // tone balance: over a few seconds the talk box keeps your guitar's own treble/mids/bass,
+            // so what changes the sound is only your mouth moving, not a constant tilt
+            longTerm[b] += 0.0005f * (shaped - longTerm[b]);
+            lastShaped[b] = clamp (shaped / std::max (0.05f, longTerm[b]), 0.0f, 4.0f) * bloom;
+        }
         target[b] = openSm * lastShaped[b] + (1.0f - openSm) * closed[b] * cl;
         if (aec && ! aecLearned) target[b] = 0.7f;   // learning: full range, so every frequency gets learned
     }
@@ -362,6 +372,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
     const float lmC = 1.0f / (0.3f * sampleRate);
+    const float tmC = 1.0f / (2.0f * sampleRate);
     const float sweepSmC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
     const float bodyAmt = p (tBody) * 0.01f;
     const float openSmA = openSm;
@@ -411,7 +422,34 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             const float w = sweepPeak.process (sweepLP.process (y));
             y = y * (1.0f - sweepAmt) + w * sweepAmt;
         }
-        // level match (slow, ~0.7 s): while your mouth is open, the talk box is as loud as the
+        // tone match (slow, ~2 s, while you talk): the talk box's lows and high mids are kept in the
+        // same proportion as your guitar's, so the tone is even with your guitar and only your
+        // mouth's movements change it
+        {
+            const float d = 0.5f * (dryL + dryR);
+            if (openSm > 0.5f)
+            {
+                const float dl = tmDryLo.process (d), dh = tmDryHi.process (d), wl = tmWetLo.process (y), wh = tmWetHi.process (y);
+                tmE[0] += tmC * (dl * dl - tmE[0]); tmE[1] += tmC * (dh * dh - tmE[1]); tmE[2] += tmC * (d * d - tmE[2]);
+                tmE[3] += tmC * (wl * wl - tmE[3]); tmE[4] += tmC * (wh * wh - tmE[4]); tmE[5] += tmC * (y * y - tmE[5]);
+            }
+            if (--tmCount <= 0)
+            {
+                tmCount = 256;
+                if (tmE[2] > 1.0e-9f && tmE[5] > 1.0e-9f && tmE[3] > 1.0e-12f && tmE[4] > 1.0e-12f)
+                {
+                    const float lo = std::sqrt ((tmE[0] / tmE[2]) / (tmE[3] / tmE[5]));
+                    const float hi = std::sqrt ((tmE[1] / tmE[2]) / (tmE[4] / tmE[5]));
+                    tmLoDb = clamp (tmLoDb + 0.02f * 20.0f * std::log10 (std::max (1.0e-3f, lo)), -9.0f, 9.0f);
+                    tmHiDb = clamp (tmHiDb + 0.02f * 20.0f * std::log10 (std::max (1.0e-3f, hi)), -9.0f, 12.0f);
+                }
+                tmLoShelf.set (Biquad::Type::LowShelf, sampleRate, 350.0f, 0.7f, tmLoDb);
+                tmHiShelf.set (Biquad::Type::HighShelf, sampleRate, 1600.0f, 0.7f, tmHiDb);
+            }
+            y = tmHiShelf.process (tmLoShelf.process (y));
+        }
+
+        // level match (slow, ~0.3 s): while your mouth is open, the talk box is as loud as the
         // guitar going into it, so switching it on never drops your volume
         if (openSm > 0.5f)
         {
