@@ -655,9 +655,11 @@ private:
     float bandC[numBands] {}, lastShaped[numBands] {};
     float peakWhisper = 1.0e-9f, bloom = 1.0f, dryE = 0, wetE = 0, levelComp = 1.0f;
     float holdLeft = 0, likeSm = 0, breathPow = 0, breathDb = -120, breathC = 0.01f;
-    ndsp::Biquad breathHP, breathHP2, breathLP;
+    ndsp::Biquad breathHP, breathHP2, breathLP, refBHP, refBHP2, refBLP;
+    float refBreathPow = 0, leakB = 0;
     // the guitar side: Heil voicing, then the same bands with your mouth's gains
-    ndsp::Biquad hp, lp1, lp2, presence, tube, carrier[numBands][2], bodyLP, bodyLP2, proximity;
+    ndsp::Biquad hp, lp1, lp2, presence, tube, carrier[numBands][2], bodyLP, bodyLP2, proximity, sweepPeak, sweepLP;
+    float sweepPos = 0, sweepSm = 0; int sweepCount = 0;
     ndsp::DelayLine tubeLine;
     float gain[numBands] {}, gainSm[numBands] {}, closed[numBands] {};
     float open = 0, openSm = 0, whisperDb = -100, makeup = 1.0f;

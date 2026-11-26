@@ -16,7 +16,7 @@ using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix, tBody };
+    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix, tBody, tSweep };
     constexpr float bandLo = 150.0f, bandHi = 6000.0f;
     inline float bandFreq (int b) { return bandLo * std::pow (bandHi / bandLo, (float) b / (float) (TalkBoxBlock::numBands - 1)); }
 }
@@ -43,6 +43,9 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     // your lips adds proximity bass, so the bottom isn't shaped away
     currentGroup = "Talk box";
     addFloat ("body", "Body", 0, 100, 60, "%", -1, 1);
+    // the mouth opening, like a real talk box: dark and muffled on "w"/"oo", blooming up into the
+    // treble as you spread your mouth into "ahh"/"eee"
+    addFloat ("opening", "Mouth opening", 0, 100, 70, "%", -1, 1);
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
@@ -71,6 +74,7 @@ void TalkBoxBlock::prepare (double sr, int)
     breathHP.set (Biquad::Type::HighPass, aRate, 5000.0f, 0.707f);
     breathHP2.set (Biquad::Type::HighPass, aRate, 5000.0f, 0.707f);
     breathLP.set (Biquad::Type::LowPass, aRate, 0.45f * aRate, 0.707f);
+    refBHP = breathHP; refBHP2 = breathHP2; refBLP = breathLP;
     breathC = 1.0f - std::exp (-1.0f / (0.01f * aRate));
     aecTaps = (int) std::lround (0.064f * aRate);            // speaker-to-mic paths up to 64 ms
     aecW.assign ((size_t) aecTaps, 0.0f);
@@ -123,7 +127,8 @@ void TalkBoxBlock::reset()
 {
     for (auto& f : micAA) f.reset();
     for (auto& f : refAA) f.reset();
-    bodyLP.reset(); bodyLP2.reset(); proximity.reset();
+    bodyLP.reset(); bodyLP2.reset(); proximity.reset(); sweepPeak.reset(); sweepLP.reset();
+    sweepPos = sweepSm = 0; sweepCount = 0;
     micHP.reset(); hp.reset(); lp1.reset(); lp2.reset(); presence.reset(); tube.reset(); tubeLine.clear();
     std::fill (aecW.begin(), aecW.end(), 0.0f);
     std::fill (aecX.begin(), aecX.end(), 0.0f);
@@ -138,7 +143,8 @@ void TalkBoxBlock::reset()
     }
     peakWhisper = 1.0e-9f; bloom = 1.0f; dryE = wetE = 0; levelComp = 1.0f;
     open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
-    breathHP.reset(); breathHP2.reset(); breathLP.reset();
+    breathHP.reset(); breathHP2.reset(); breathLP.reset(); refBHP.reset(); refBHP2.reset(); refBLP.reset();
+    refBreathPow = 0; leakB = 0;
     for (int b = 0; b < numBands; ++b) lastShaped[b] = 1.0f; limEnv = 0; decimCount = 0;
 }
 
@@ -194,6 +200,10 @@ void TalkBoxBlock::analyse (float mic, float ref)
     {
         const float hb = breathLP.process (breathHP2.process (breathHP.process (e)));
         breathPow += breathC * (hb * hb - breathPow);
+        // the same band of what the speakers play, so their own treble (an open "ee" through the
+        // talk box) is taken back out of the gate's reading and can't hold it open
+        const float hr = refBLP.process (refBHP2.process (refBHP.process (refD)));
+        refBreathPow += breathC * (hr * hr - refBreathPow);
     }
     for (int b = 0; b < numBands; ++b)
     {
@@ -241,7 +251,13 @@ void TalkBoxBlock::analyse (float mic, float ref)
     // The gate listens to the breath band (above ~5 kHz): your whisper's breath and "s" sounds live
     // there, while the talk box's own sound (Heil low-pass, then the cab) has almost nothing there.
     // So the speakers can't open it, however loud, and it can't lock itself open.
-    breathDb = 10.0f * std::log10 (breathPow + 1.0e-12f);
+    if (refBreathPow > 1.0e-12f && open < 0.5f)   // learned between your words: falls fast, rises slowly (~1 s)
+    {
+        const float q = breathPow / refBreathPow;
+        leakB += (q < leakB ? 0.02f : 0.001f) * (q - leakB);
+    }
+    const float breathYou = std::max (0.1f * breathPow, breathPow - 3.0f * leakB * refBreathPow);
+    breathDb = 10.0f * std::log10 (breathYou + 1.0e-12f);
     const float wF = std::max (breathDb, -100.0f);   // a moment of total silence isn't the room's level
     // (while it's learning your speakers it follows the leftover directly, so it starts at the right level)
     if (aec && ! aecLearned) floorDb += 0.05f * (wF - floorDb);
@@ -296,6 +312,27 @@ void TalkBoxBlock::analyse (float mic, float ref)
     const float rel = clamp (total / (peakWhisper + 1.0e-12f), 0.0f, 1.0f);
     bloom += 0.05f * ((0.45f + 0.55f * std::sqrt (std::sqrt (rel))) - bloom);
 
+    // where the sweep sits: the brightness of your vowel (its centre of gravity between ~400 Hz
+    // and ~2.5 kHz) plus how wide open you are. Closed mouth = heel down (dark).
+    {
+        float wsum = 0, lsum = 0;
+        for (int b = 0; b < numBands; ++b) { wsum += clean[b]; lsum += clean[b] * std::log (bandFreq (b)); }
+        const float logC = wsum > 0 ? lsum / wsum : std::log (400.0f);
+        // (only the bands the speakers aren't playing in count, so leftover guitar can't drag it dark)
+        float wsum2 = 0, lsum2 = 0;
+        for (int b = 0; b < numBands; ++b)
+        {
+            const float f = bandFreq (b);
+            if (f < 250.0f || f > 3600.0f) continue;   // where vowels differ
+            const float you = std::max (0.0f, eMic[b] - 4.0f * leak[b] * eRef[b]);
+            wsum2 += you; lsum2 += you * std::log (f);
+        }
+        const float logC2 = wsum2 > 1.0e-12f ? lsum2 / wsum2 : logC;
+        const float bright = clamp ((logC2 - std::log (750.0f)) / (std::log (1900.0f) - std::log (750.0f)), 0.0f, 1.0f);
+        const float want = open > 0.5f ? clamp (0.85f * bright + 0.15f * std::sqrt (rel), 0.0f, 1.0f) : 0.0f;
+        sweepPos += (want > sweepPos ? 0.06f : 0.025f) * (want - sweepPos);   // opens ~15 ms, closes ~40 ms
+    }
+
     const float cl = p (tClosed) * 0.01f * 0.6f;
     for (int b = 0; b < numBands; ++b)
     {
@@ -325,8 +362,10 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
     const float lmC = 1.0f / (0.7f * sampleRate);
+    const float sweepSmC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
     const float bodyAmt = p (tBody) * 0.01f;
     const float openSmA = openSm;
+    const float sweepAmt = p (tSweep) * 0.01f;
     auto& ring = OutputRing::get();
 
     for (int i = 0; i < n; ++i)
@@ -355,6 +394,22 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         // body: the low end under the vowels, and the close mic's proximity bass
         y += bodyAmt * 1.6f * (0.55f + 0.45f * openSmA) * bodyLP2.process (bodyLP.process (v));
         y = proximity.process (y);
+        // the mouth opening: a closed mouth lets only the dark low-mids out; as it spreads, the top
+        // opens up smoothly to the full Tone, with the slight resonance of the mouth cavity
+        if (sweepAmt > 0.001f)
+        {
+            if (--sweepCount <= 0)
+            {
+                sweepCount = 32;
+                const float top = p (tTone);
+                const float fc = 550.0f * std::exp (std::log (std::max (600.0f, top) / 550.0f) * sweepSm);
+                sweepLP.set (Biquad::Type::LowPass, sampleRate, std::min (fc, 0.45f * sampleRate), 1.1f);
+                sweepPeak.set (Biquad::Type::LowPass, sampleRate, std::min (fc, 0.45f * sampleRate), 0.6f);
+            }
+            sweepSm += sweepSmC * (sweepPos - sweepSm);
+            const float w = sweepPeak.process (sweepLP.process (y));
+            y = y * (1.0f - sweepAmt) + w * sweepAmt;
+        }
         // level match (slow, ~0.7 s): while your mouth is open, the talk box is as loud as the
         // guitar going into it, so switching it on never drops your volume
         if (openSm > 0.5f)
