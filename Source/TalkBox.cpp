@@ -32,7 +32,7 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addToggle ("aec", "Echo cancel", true);
     addFloat ("bleed2", "Bleed cut", 0, 100, 30, "%", -1, 1);
     currentGroup = "Talk box";
-    addFloat ("clarity", "Clarity", 0, 100, 70, "%", -1, 1);
+    addFloat ("clarity2", "Clarity", 0, 100, 85, "%", -1, 1);   // new id: blocks already placed get the stronger default
     addFloat ("tone", "Tone", 1500, 8000, 4200, "Hz", 3500, 10);
     addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
@@ -155,7 +155,8 @@ void TalkBoxBlock::analyse (float mic, float ref)
             // whisper never gets learned as "speaker"
             if (refPow > 1.0e-7f)
             {
-                const float mu = (! aecLearned ? 0.5f : (open > 0.5f ? 0.03f : 0.15f)) * e / (refPow + 1.0e-6f);
+                // frozen while you whisper (it only learns the speakers between your words)
+                const float mu = (! aecLearned ? 0.5f : (open > 0.5f ? 0.0f : 0.15f)) * e / (refPow + 1.0e-6f);
                 for (int k = 0; k < aecTaps; ++k) aecW[(size_t) k] += mu * x[k];
             }
         }
@@ -207,7 +208,7 @@ void TalkBoxBlock::analyse (float mic, float ref)
     float clean[numBands], total = 0;
     for (int b = 0; b < numBands; ++b)
     {
-        if (eRef[b] > 1.0e-10f)
+        if (eRef[b] > 1.0e-10f && open < 0.5f)   // learned only between your words, so a held vowel isn't taken for the speakers
         {
             const float q = eMic[b] / eRef[b];
             leak[b] += (q < leak[b] ? 0.025f : 0.0004f) * (q - leak[b]);   // the quietest the mic gets per unit of speaker
@@ -228,7 +229,7 @@ void TalkBoxBlock::analyse (float mic, float ref)
     const float wF = std::max (breathDb, -100.0f);   // a moment of total silence isn't the room's level
     // (while it's learning your speakers it follows the leftover directly, so it starts at the right level)
     if (aec && ! aecLearned) floorDb += 0.05f * (wF - floorDb);
-    else                     floorDb += (wF < floorDb ? 0.01f : 0.0004f) * (wF - floorDb);
+    else if (open < 0.5f)    floorDb += (wF < floorDb ? 0.01f : 0.0004f) * (wF - floorDb);   // frozen while you whisper
     const float thr = std::max (-95.0f, floorDb + p (tGate));
     if (aec && ! aecLearned) { open = 0.0f; status = 4; }
     else
@@ -237,7 +238,10 @@ void TalkBoxBlock::analyse (float mic, float ref)
         else
         {
             holdLeft -= 0.001f;                                         // a hop is 1 ms
-            if (holdLeft <= 0.0f && breathDb < thr) open = 0.0f;       // closes ~180 ms after you stop
+            // once open it stays open down to 6 dB under the opening level, so a held vowel (less breath
+            // than a consonant) keeps its shape; closes ~180 ms after you really stop
+            if (breathDb > thr - 6.0f) holdLeft = std::max (holdLeft, 0.05f);
+            if (holdLeft <= 0.0f && breathDb < thr - 6.0f) open = 0.0f;
         }
         status = open > 0.5f ? 1 : 0;
     }
