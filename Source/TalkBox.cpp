@@ -29,8 +29,8 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addChoice ("mic", "Mic input", { "Auto (the other input)", "Input 1", "Input 2" }, 0);
     addFloat ("sens", "Mic level", -12, 36, 12, "dB", -1, 0.5f);
     addFloat ("gate", "Gate", 3, 24, 9, "dB", -1, 0.5f);
-    addToggle ("aec", "Echo cancel", true);
-    addFloat ("bleed2", "Bleed cut", 0, 100, 30, "%", -1, 1);
+    addToggle ("aec3", "Echo cancel", true);
+    addFloat ("bleed3", "Bleed cut", 0, 100, 0, "%", -1, 1);
     currentGroup = "Talk box";
     addFloat ("clarity3", "Clarity", 0, 100, 70, "%", -1, 1);   // new id: blocks already placed get the new default
     addFloat ("tone2", "Tone", 1500, 9000, 5500, "Hz", 4500, 10);
@@ -128,7 +128,7 @@ void TalkBoxBlock::reset()
         eMic[b] = eRef[b] = leak[b] = 0;
         target[b] = gain[b] = gainSm[b] = closed[b];
     }
-    peakWhisper = 1.0e-9f; bloom = 1.0f;
+    peakWhisper = 1.0e-9f; bloom = 1.0f; dryE = wetE = 0; levelComp = 1.0f;
     open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
     breathHP.reset(); breathHP2.reset(); breathLP.reset();
     for (int b = 0; b < numBands; ++b) lastShaped[b] = 1.0f; limEnv = 0; decimCount = 0;
@@ -157,7 +157,10 @@ void TalkBoxBlock::analyse (float mic, float ref)
             if (refPow > 1.0e-7f)
             {
                 // frozen while you whisper (it only learns the speakers between your words)
-                const float mu = (! aecLearned ? 0.5f : (open > 0.5f ? 0.0f : 0.15f)) * e / (refPow + 1.0e-6f);
+                // never while you might be whispering (gate open, or any breath above the room), so
+                // it can't learn your voice as "speaker" and cancel it
+                const bool quiet = open < 0.5f && breathDb < floorDb + 3.0f;
+                const float mu = (! aecLearned ? 0.5f : (quiet ? 0.15f : 0.0f)) * e / (refPow + 1.0e-6f);
                 for (int k = 0; k < aecTaps; ++k) aecW[(size_t) k] += mu * x[k];
             }
         }
@@ -206,15 +209,19 @@ void TalkBoxBlock::analyse (float mic, float ref)
     // gentle: it only turns down what follows the speakers, never cuts a band out completely
     // (cutting bands to nothing is what made it choppy)
     const float bleedK = 1.5f * p (tBleed) * 0.01f;
+    float refMax = 1.0e-12f;
+    for (int b = 0; b < numBands; ++b) refMax = std::max (refMax, eRef[b]);
     float clean[numBands], total = 0;
     for (int b = 0; b < numBands; ++b)
     {
-        if (eRef[b] > 1.0e-10f && open < 0.5f)   // learned only between your words, so a held vowel isn't taken for the speakers
+        // learned only between your words, and only in bands where the speakers are really playing
+        // (the talk box puts almost no highs out, so in the highs the mic is you, not the speakers)
+        if (eRef[b] > 1.0e-3f * refMax && eRef[b] > 1.0e-10f && open < 0.5f && breathDb < floorDb + 3.0f)
         {
             const float q = eMic[b] / eRef[b];
             leak[b] += (q < leak[b] ? 0.025f : 0.0004f) * (q - leak[b]);   // the quietest the mic gets per unit of speaker
         }
-        clean[b] = std::max (0.25f * eMic[b], eMic[b] - bleedK * leak[b] * eRef[b]);
+        clean[b] = eRef[b] > 1.0e-3f * refMax ? std::max (0.5f * eMic[b], eMic[b] - bleedK * leak[b] * eRef[b]) : eMic[b];
         total += clean[b];
     }
 
@@ -309,6 +316,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float gC = 1.0f - std::exp (-1.0f / (0.006f * sampleRate));
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
+    const float lmC = 1.0f / (0.7f * sampleRate);
     auto& ring = OutputRing::get();
 
     for (int i = 0; i < n; ++i)
@@ -333,12 +341,22 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             gainSm[b] += gC * (target[b] - gainSm[b]);
             y += gainSm[b] * carrier[b][1].process (carrier[b][0].process (v));
         }
-        y *= makeup * level;
+        y *= makeup;
+        // level match (slow, ~0.7 s): while your mouth is open, the talk box is as loud as the
+        // guitar going into it, so switching it on never drops your volume
+        if (openSm > 0.5f)
+        {
+            const float d = 0.5f * (dryL + dryR);
+            dryE += lmC * (d * d - dryE);
+            wetE += lmC * (y * y - wetE);
+            if (wetE > 1.0e-9f) levelComp += lmC * (clamp (std::sqrt (dryE / wetE), 0.08f, 6.0f) - levelComp);
+        }
+        y *= levelComp * level;
 
         // safety limiter: nothing the talk box does can jump out loud
         const float a = std::abs (y);
         limEnv = a > limEnv ? a : limEnv + limRel * (a - limEnv);
-        if (limEnv > 0.8f) y *= 0.8f / limEnv;
+        if (limEnv > 0.9f) y *= 0.9f / limEnv;
 
         L[i] = y * mix + dryL * (1.0f - mix);
         R[i] = y * mix + dryR * (1.0f - mix);
