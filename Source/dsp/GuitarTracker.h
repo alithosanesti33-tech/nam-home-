@@ -43,7 +43,7 @@ public:
         vibCoef = 1.0f - std::exp (-1.0f / (0.150f * rate));
         velWindow = (int) (0.015f * rate);
         guardWindow = (int) (0.060f * rate);
-        settle = (int) (0.003f * rate);
+        settle = (int) (0.002f * rate);
         releaseHold = (int) (0.06f * rate);
         reset();
     }
@@ -53,7 +53,7 @@ public:
         tracker.reset(); gate.reset(); pre1.reset(); pre2.reset();
         env = 0; fine = centre = accepted = 60.0f;
         have = false; noteValid = false;
-        candidate = 0; candCount = 0; startN = 0; startRef = 0;
+        candidate = 0; candCount = 0;
         sinceAttack = 1 << 30; velPeak = 0; vibEnergy = 0; lastHz = 0;
         histN = 0; noteActive = false; notePeak = 0; quietFor = 0;
     }
@@ -80,7 +80,7 @@ public:
             sinceAttack = 0; velPeak = 0;
             // the pitch is unknown again until the tracker confirms it, so an instrument never
             // plays the old note on the new attack
-            noteValid = false; histN = 0; candCount = 0; startN = 0;
+            noteValid = false; histN = 0; candCount = 0;
         }
         if (noteActive)
         {
@@ -128,18 +128,13 @@ private:
 
         if (! noteValid)
         {
-            // first pitch of a new note. A pick's first few cycles very often read an octave (or a
-            // fifth) low, and taking that first reading is what made every pick start with a low,
-            // bassy blip. So the note only speaks once 3 readings in a row agree (about 1.5 ms more);
-            // if the string never settles, it plays the median after 60 ms rather than not at all.
-            if (sinceAttack < settle) return;   // the first ~3 ms after a pick are click, not pitch
-            if (startN > 0 && std::fabs (m - startRef) < 0.4f) { startRef = 0.5f * (startRef + m); ++startN; }
-            else { startRef = m; startN = 1; }
-            if (startN >= 3 || (sinceAttack >= guardWindow && histN >= 3))
+            // first pitch of a new note: take it straight away (speed), but outside the attack
+            // window wait for 2 agreeing estimates
+            if (sinceAttack < settle) return;   // the first ~2 ms after a pick are click, not pitch
+            if (sinceAttack < guardWindow || histN >= 2)
             {
-                accept (startN >= 3 ? startRef : med, true, f);
+                accept (m, true, f);
                 noteValid = open;
-                startN = 0;
             }
             return;
         }
@@ -176,7 +171,6 @@ private:
     float fine = 60, centre = 60, accepted = 60, fineCoef = 0.01f, centreCoef = 0.001f, vibCoef = 0.001f, vibEnergy = 0;
     bool have = false, noteValid = false;
     float candidate = 0; int candCount = 0;
-    float startRef = 0; int startN = 0;
     int sinceAttack = 1 << 30, velWindow = 720, guardWindow = 2880, settle = 96;
     float velPeak = 0, lastHz = 0;
     float hist[3] {}; int histN = 0;
