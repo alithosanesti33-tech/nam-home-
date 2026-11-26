@@ -36,7 +36,7 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addFloat ("tone2", "Tone", 1500, 9000, 5500, "Hz", 4500, 10);
     addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
-    addFloat ("closed", "Closed mouth", 0, 100, 25, "%", -1, 1);
+    addFloat ("closed2", "Closed mouth", 0, 100, 40, "%", -1, 1);
     addFloat ("level", "Level", -24, 12, 0, "dB", -1, 0.1f);
     addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1);
     // the low end: the horn and tube still push the low notes through your mouth, and a mic right at
@@ -141,7 +141,7 @@ void TalkBoxBlock::reset()
         eMic[b] = eRef[b] = leak[b] = 0;
         target[b] = gain[b] = gainSm[b] = closed[b];
     }
-    peakWhisper = 1.0e-9f; bloom = 1.0f; dryE = wetE = 0; levelComp = 1.0f;
+    peakWhisper = 1.0e-9f; bloom = 1.0f; dryE = wetE = 0; levelComp = 1.4f;   // starts near the usual make-up, so it is never quiet at first
     open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
     breathHP.reset(); breathHP2.reset(); breathLP.reset(); refBHP.reset(); refBHP2.reset(); refBLP.reset();
     refBreathPow = 0; leakB = 0;
@@ -361,7 +361,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float gC = 1.0f - std::exp (-1.0f / (0.006f * sampleRate));
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
-    const float lmC = 1.0f / (0.7f * sampleRate);
+    const float lmC = 1.0f / (0.3f * sampleRate);
     const float sweepSmC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
     const float bodyAmt = p (tBody) * 0.01f;
     const float openSmA = openSm;
