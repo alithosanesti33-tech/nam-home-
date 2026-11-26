@@ -275,7 +275,7 @@ void SaxBlock::reset()
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
     breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
-    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f;
+    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f; slideHold = 0;
 }
 
 void SaxBlock::process (float* L, float* R, int n)
@@ -412,10 +412,13 @@ void SaxBlock::process (float* L, float* R, int n)
         // stretching one recording over the whole slide (which sounds like a chipmunk), hand over to the
         // recording nearest your current pitch every time you have moved more than ~half a semitone, with
         // a smooth cross-fade, so every point of the slide is a real recording bent by less than that.
-        if (sounding && ! pending && ! releasing && std::abs (played + fold - samplerNote) > 0.55f)
+        // (only once you have stayed away for ~15 ms, so a quick note change is one hand-over, not several)
+        if (sounding && ! pending && ! releasing && std::abs (played + fold - samplerNote) > 0.55f) slideHold += dtS; else slideHold = 0;
+        if (slideHold > 0.015f)
         {
             sampler.noteStart (played + fold, 3, breath);
             samplerNote = played + fold;
+            slideHold = 0;
         }
         if (f.released && sounding)
         {
@@ -465,7 +468,7 @@ void SaxBlock::process (float* L, float* R, int n)
         float y;
         if (recorded)
         {
-            float r = haveRecordings ? sampler.tick (pitch - samplerNote, blow * ampVib) : 0.0f;
+            float r = haveRecordings ? sampler.tick (pitch, blow * ampVib) : 0.0f;
             if (growl > 0.001f)
             {
                 // growl: a hummed, uneven throat buzz (wandering rate and depth), not a steady tremolo

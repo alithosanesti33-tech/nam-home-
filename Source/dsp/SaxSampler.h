@@ -336,7 +336,7 @@ public:
     {
         auto& bank = SaxSampleBank::get();
         const float src = midi + shift;
-        const float fade = kind == 0 ? 0.003f : (kind == 1 ? 0.025f : (kind == 3 ? 0.035f : 0.008f));
+        const float fade = kind == 0 ? 0.003f : (kind == 1 ? 0.045f : (kind == 3 ? 0.040f : 0.008f));
         if (kind == 0 || kind == 2) layer = breath < 0.42f ? 0 : (breath < 0.82f ? 1 : 2);   // legato keeps the same take
         auto* smp = bank.nearest (horn, layer, src);
         if (smp == nullptr) return;
@@ -344,7 +344,7 @@ public:
         // with what is sounding now, so the cross-fade never cancels out (a dip or a hollow "phasey" blip)
         double startPos = -1;
         if ((kind == 1 || kind == 3) && cur >= 0 && players[cur].s != nullptr)
-            startPos = alignedStart (players[cur], *smp, midi);
+            startPos = alignedStart (players[cur], *smp, lastPitch);
         if (cur >= 0) players[cur].stop (fade * sr);
         // use a free slot, or the quietest one, so a slot that is still fading never gets cut off
         int best = 0; float bestG = 2.0f;
@@ -361,7 +361,7 @@ public:
     double alignedStart (const SaxPlayer& from, const SaxSample& to, float pitch) const
     {
         const auto& a = *from.s;
-        const double rateA = (a.rate / sr) * std::exp2 ((from.note - shift + from.bend - a.root) / 12.0);
+        const double rateA = (a.rate / sr) * std::exp2 ((pitch - a.root) / 12.0);
         const double rateB = (to.rate / sr) * std::exp2 ((pitch - to.root) / 12.0);
         const double hz = 440.0 * std::exp2 ((pitch - 69.0) / 12.0);
         const int N = juce::jlimit (32, 1200, (int) (2.0 * sr / hz));          // two cycles at the output rate
@@ -390,8 +390,9 @@ public:
 
     // bend: semitones away from the current note (your bends and vibrato, scoops, falls, glides).
     // breath 0..1 sets the level only.
-    inline float tick (float bend, float breath)
+    inline float tick (float pitch, float breath)
     {
+        lastPitch = pitch;
         const float b = clamp (breath, 0.0f, 1.2f);
 
         float y = 0.0f;
@@ -399,8 +400,9 @@ public:
         {
             auto& p = players[i];
             if (p.s == nullptr) continue;
-            if (i == cur) p.bend = bend;
-            const double rate = (p.s->rate / sr) * std::exp2 ((p.note - shift + p.bend - p.s->root) / 12.0);
+            // every recording that is sounding (the new note and the one fading out) plays at the same,
+            // current pitch: a note change is one continuous slur, not two recordings swapping
+            const double rate = (p.s->rate / sr) * std::exp2 ((pitch - p.s->root) / 12.0);
             y += p.tick (rate);
         }
         // no filter sweep here: the recording's own tone is kept as it is. (A filter that followed the
@@ -416,7 +418,7 @@ private:
     int horn = 0, cur = -1, layer = 1;
     SaxPlayer players[numPlayers];
     Biquad tone;
-    float lastFc = -1, drift = 0, driftTarget = 0;
+    float lastFc = -1, drift = 0, driftTarget = 0, lastPitch = 60.0f;
     int fcCount = 0, driftCount = 0;
     uint32_t seed = 22222u;
 };
