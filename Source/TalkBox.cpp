@@ -101,7 +101,7 @@ void TalkBoxBlock::prepare (double sr, int)
     proximity.set (Biquad::Type::LowShelf, (float) sr, 200.0f, 0.7f, 2.0f);
     for (auto* f : { &tmDryLo, &tmWetLo }) f->set (Biquad::Type::LowPass, (float) sr, 350.0f, 0.7f);
     for (auto* f : { &tmDryHi, &tmWetHi }) f->set (Biquad::Type::BandPass, (float) sr, 2600.0f, 0.8f);
-    presence.set (Biquad::Type::Peak, (float) sr, 2800.0f, 0.9f, 1.5f);   // a touch of Heil horn; the tone stays even with your guitar
+    presence.set (Biquad::Type::Peak, (float) sr, 2000.0f, 0.8f, 4.0f);   // the Heil horn driver's honky mids
     tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
     tubeLine.setMaxSamples ((int) (0.02 * sr));
 
@@ -394,6 +394,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         const float back = tube.process (tubeLine.read (tubeDelay));
         v = v + 0.45f * tubeAmt * back;
         tubeLine.push (v);
+        const float voiced = v;
 
         float y = 0;
         for (int b = 0; b < numBands; ++b)
@@ -423,10 +424,11 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             y = y * (1.0f - sweepAmt) + w * sweepAmt;
         }
         // tone match (slow, ~2 s, while you talk): the talk box's lows and high mids are kept in the
-        // same proportion as your guitar's, so the tone is even with your guitar and only your
+        // same proportion as your guitar voiced by the Heil (horn honk, low cut, roll-off above the
+        // Tone), so you keep Frampton's Heil colour, the mouth shaping never dulls it, and only your
         // mouth's movements change it
         {
-            const float d = 0.5f * (dryL + dryR);
+            const float d = voiced;
             if (openSm > 0.5f)
             {
                 const float dl = tmDryLo.process (d), dh = tmDryHi.process (d), wl = tmWetLo.process (y), wh = tmWetHi.process (y);
@@ -456,7 +458,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             const float d = 0.5f * (dryL + dryR);
             dryE += lmC * (d * d - dryE);
             wetE += lmC * (y * y - wetE);
-            if (wetE > 1.0e-9f) levelComp += lmC * (clamp (std::sqrt (dryE / wetE), 0.08f, 6.0f) - levelComp);
+            if (wetE > 1.0e-9f) levelComp += lmC * (clamp (0.8f * std::sqrt (dryE / wetE), 0.08f, 6.0f) - levelComp);
         }
         y *= levelComp * level;
 
