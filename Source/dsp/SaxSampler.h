@@ -359,9 +359,6 @@ public:
     inline float tick (float bend, float breath)
     {
         const float b = clamp (breath, 0.0f, 1.2f);
-        // a player's pitch is never perfectly still: a slow, tiny wander (about +-3 cents)
-        if (--driftCount <= 0) { driftTarget = (rnd() * 2.0f - 1.0f) * 0.03f; driftCount = (int) (sr * (0.15f + 0.3f * rnd())); }
-        drift += (driftTarget - drift) * (1.0f / (0.2f * sr));
 
         float y = 0.0f;
         for (int i = 0; i < numPlayers; ++i)
@@ -369,7 +366,7 @@ public:
             auto& p = players[i];
             if (p.s == nullptr) continue;
             if (i == cur) p.bend = bend;
-            const double rate = (p.s->rate / sr) * std::exp2 ((p.note - shift + p.bend + drift - p.s->root) / 12.0);
+            const double rate = (p.s->rate / sr) * std::exp2 ((p.note - shift + p.bend - p.s->root) / 12.0);
             y += p.tick (rate);
         }
         // softer than the take = darker, the way blowing softer closes a sax's tone

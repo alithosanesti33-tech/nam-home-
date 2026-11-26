@@ -353,7 +353,6 @@ void SaxBlock::process (float* L, float* R, int n)
         x = dyn * x + (1.0f - dyn) * 0.72f;
         return 0.15f + 0.85f * std::pow (juce::jlimit (0.0f, 1.0f, x), 0.8f);
     };
-    const float bendSmC = coef (0.012f);
 
     float lastHz = 0;
     for (int i = 0; i < n; ++i)
@@ -364,10 +363,7 @@ void SaxBlock::process (float* L, float* R, int n)
 
         // where the guitar is: note centre plus as much of your own vibrato/bends as you want
         const float centre = snap ? std::round (f.centre) : f.centre;
-        // the tracker's tiny pitch flutter is smoothed away (it is what made the horn warble like a synth);
-        // your real vibrato and bends are slow enough to pass straight through
-        bendSm += bendSmC * ((f.midi - f.centre) - bendSm);
-        const float played = centre + follow * bendSm + octave;
+        const float played = centre + follow * (f.midi - f.centre) + octave;
 
         if (f.attack || (f.repick && sounding))
         {
