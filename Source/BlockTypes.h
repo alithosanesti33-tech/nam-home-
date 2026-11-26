@@ -345,7 +345,7 @@ private:
     float fold = 0, glideOff = 0, scoopOff = 0, fallOff = 0, fallTarget = 0;
     float breath = 0, bite = 0, tongue = 0, noteVel = 0.7f, noteTime = 0, vibPhase = 0, vibFromGuitar = 0, dipEnv = 0;
     float lastPitch = 60.0f, outPitch = 60.0f;
-    float samplerNote = 60.0f, bendSm = 0, growlRnd = 0, sinceChange = 1.0f, slideHold = 0;
+    float samplerNote = 60.0f, bendSm = 0, growlRnd = 0, sinceChange = 1.0f, slideHold = 0, slidePitch = 60.0f;
     uint32_t growlSeed = 777u;
     float growlNoise() { growlSeed = growlSeed * 1664525u + 1013904223u; return (float) (growlSeed >> 8) / 8388608.0f - 1.0f; }
 };

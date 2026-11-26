@@ -275,7 +275,7 @@ void SaxBlock::reset()
     pendingAge = 0;
     fold = glideOff = scoopOff = fallOff = fallTarget = 0;
     breath = bite = tongue = noteTime = vibPhase = vibFromGuitar = dipEnv = 0;
-    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f; slideHold = 0;
+    noteVel = 0.7f; lastPitch = outPitch = samplerNote = 60.0f; bendSm = growlRnd = 0; sinceChange = 1.0f; slideHold = 0; slidePitch = 60.0f;
 }
 
 void SaxBlock::process (float* L, float* R, int n)
@@ -354,6 +354,7 @@ void SaxBlock::process (float* L, float* R, int n)
         return 0.15f + 0.85f * std::pow (juce::jlimit (0.0f, 1.0f, x), 0.8f);
     };
 
+    const float slideC = coef (0.06f);
     float lastHz = 0;
     for (int i = 0; i < n; ++i)
     {
@@ -385,7 +386,7 @@ void SaxBlock::process (float* L, float* R, int n)
                 if (fresh) { scoopOff = -scoopSemis * (0.6f + 0.4f * noteVel); glideOff = 0; breath = 0.0f; }
                 else if (std::abs (target - lastPitch) > 0.5f) { glideOff = 0; scoopOff = -scoopSemis * 0.4f; voice.keyClick (0.6f); }
                 sampler.noteStart (target, fresh ? 0 : (tongueOn ? 2 : 1), breathFor (noteVel, f.level));
-                samplerNote = target;
+                samplerNote = slidePitch = target;
                 bite = atk * (0.15f + 0.25f * noteVel);
                 sounding = true; releasing = false; fallOff = 0; fallTarget = 0;
                 noteTime = 0;
@@ -405,7 +406,7 @@ void SaxBlock::process (float* L, float* R, int n)
             if (! sliding) { voice.keyClick (0.8f); dipEnv = 0.18f; }
             sinceChange = 0;
             sampler.noteStart (target, 1, breath);
-            samplerNote = target;
+            samplerNote = slidePitch = target;
             noteTime = 0;
         }
         // slides and big bends: the guitar's pitch moves smoothly, so no new note is detected. Instead of
@@ -413,11 +414,15 @@ void SaxBlock::process (float* L, float* R, int n)
         // recording nearest your current pitch every time you have moved more than ~half a semitone, with
         // a smooth cross-fade, so every point of the slide is a real recording bent by less than that.
         // (only once you have stayed away for ~15 ms, so a quick note change is one hand-over, not several)
-        if (sounding && ! pending && ! releasing && std::abs (played + fold - samplerNote) > 0.55f) slideHold += dtS; else slideHold = 0;
+        // decided on your pitch averaged over ~60 ms, so finger vibrato (even wide) never swaps recordings
+        // back and forth on each wobble; only a real move (a slide, a big bend) does
+        slidePitch += slideC * ((played + fold) - slidePitch);
+        if (sounding && ! pending && ! releasing && std::abs (slidePitch - samplerNote) > 0.6f) slideHold += dtS; else slideHold = 0;
         if (slideHold > 0.015f)
         {
+            // the average only decides WHEN; the new recording is the one for where you are right now
             sampler.noteStart (played + fold, 3, breath);
-            samplerNote = played + fold;
+            samplerNote = slidePitch = played + fold;
             slideHold = 0;
         }
         if (f.released && sounding)
