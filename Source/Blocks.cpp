@@ -266,6 +266,7 @@ juce::String Block::typeName (Type t)
         case Type::Looper:       return "Looper";
         case Type::Drums:        return "Drums";
         case Type::TalkBox:      return "Talk box";
+        case Type::BackingTrack: return "Backing track";
         case Type::NumTypes:     break;
     }
     return {};
@@ -283,7 +284,7 @@ juce::String Block::categoryName (Type t)
         case Type::Gate: case Type::Utility: return "Utility";
         case Type::PhatTrack: return "Synthesizers";
         case Type::Sax: return "Saxophone";
-        case Type::Looper: case Type::Drums: return "Looper & drums";
+        case Type::Looper: case Type::Drums: case Type::BackingTrack: return "Looper & drums";
         default: return "Effects";
     }
 }
@@ -305,6 +306,7 @@ juce::Colour Block::colour (Type t)
         case Type::Sax:          return juce::Colour (0xffe8c547);
         case Type::Looper:       return juce::Colour (0xffe5484d);
         case Type::Drums:        return juce::Colour (0xff4f9fe0);
+        case Type::BackingTrack: return juce::Colour (0xff4fc3a1);
         default:                 return juce::Colour (0xffe26ba8);
     }
 }
@@ -346,6 +348,7 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Rotary:       return std::make_unique<RotaryBlock>();
         case Type::Vibe:         return std::make_unique<VibeBlock>();
         case Type::TalkBox:      return std::make_unique<TalkBoxBlock>();
+        case Type::BackingTrack: return std::make_unique<BackingTrackBlock>();
         case Type::Looper:       return std::make_unique<LooperBlock>();
         case Type::Drums:        return std::make_unique<DrumsBlock>();
         case Type::NumTypes:     break;

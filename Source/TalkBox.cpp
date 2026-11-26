@@ -328,7 +328,8 @@ void TalkBoxBlock::analyse (float mic, float ref)
         {
             const float f = bandFreq (b);
             if (f < 250.0f || f > 3600.0f) continue;   // where vowels differ
-            const float you = std::max (0.0f, eMic[b] - 4.0f * leak[b] * eRef[b]);
+            // Bleed cut off = your mic exactly as heard (after echo cancelling): nothing is taken out
+            const float you = std::max (0.0f, eMic[b] - (bleedK > 0.0f ? 4.0f * leak[b] * eRef[b] : 0.0f));
             wsum2 += you; lsum2 += you * std::log (f);
         }
         const float logC2 = wsum2 > 1.0e-12f ? lsum2 / wsum2 : logC;

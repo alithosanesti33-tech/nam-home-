@@ -49,6 +49,7 @@ target_sources(NAMHome PRIVATE
     Source/Measure.cpp
     Source/Instruments.cpp
     Source/TalkBox.cpp
+    Source/BackingTrack.cpp
     Source/NamBlocks.cpp
     Source/Engine.cpp
     Source/Tone3000.cpp

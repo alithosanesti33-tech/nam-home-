@@ -670,3 +670,31 @@ private:
     std::atomic<int> status { 0 };   // 0 listening, 1 hearing you, 2 no second input
 };
 
+// Backing track: plays a track (MP3 / WAV / M4A / AIFF) from the "Backing Tracks" folder in your
+// NAM Home library. Because it plays from NAM Home, the talk box's echo canceller knows exactly
+// what it is and takes its vocals back out of your mic.
+class BackingTrackBlock : public Block, private juce::Thread
+{
+public:
+    BackingTrackBlock();
+    ~BackingTrackBlock() override;
+    juce::String getSubtitle() const override;
+    juce::var saveExtra() const override;
+    void loadExtra (const juce::var& v) override;
+    static juce::File folder();
+protected:
+    void prepare (double sr, int) override;
+    void reset() override { pos = 0; }
+    void process (float* L, float* R, int n) override;
+private:
+    void run() override;   // loads the chosen track in the background
+    struct Track { std::vector<float> l, r; juce::String name; };
+    std::shared_ptr<Track> track;           // swapped with std::atomic_load / store
+    juce::StringArray files;                // the folder's tracks when this block was made
+    std::atomic<int> wanted { -1 }, loaded { -1 };
+    std::atomic<double> loadRate { 48000.0 };
+    double pos = 0;
+    bool lastRestart = false;
+    juce::String savedName;
+};
+

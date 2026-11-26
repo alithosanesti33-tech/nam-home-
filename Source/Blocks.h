@@ -89,7 +89,7 @@ public:
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
         GraphicEQ, ParametricEQ, Delay, Reverb, TriChorus, Utility, PhatTrack, Sax,
-        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, TalkBox, NumTypes
+        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, TalkBox, BackingTrack, NumTypes
     };
 
     explicit Block (Type t);
