@@ -462,11 +462,20 @@ void SaxBlock::process (float* L, float* R, int n)
             case 4:  vibFromGuitar += vibGC * (f.vibrato - vibFromGuitar); vd = vibDepth * juce::jlimit (0.0f, 1.0f, vibFromGuitar * 1.6f); break;
             default: break;
         }
-        vibPhase += vibRate * dtS;
-        if (vibPhase >= 1.0f) vibPhase -= 1.0f;
+        // jaw vibrato like a real player: the jaw loosens below the note and comes back up to it, so the
+        // pitch dips mostly below (two thirds of the swing is under the note), and no two cycles are quite
+        // the same (rate and depth drift a little each cycle)
+        vibPhase += vibRate * vibRateJit * dtS;
+        if (vibPhase >= 1.0f)
+        {
+            vibPhase -= 1.0f;
+            vibRateJit = 1.0f + 0.04f * growlNoise();
+            vibDepthJit = 0.9f + 0.12f * growlNoise();
+        }
         const float vs1 = std::sin (6.2831853f * vibPhase);
-        pitch += vd * vs1;                               // depth is in semitones (cents / 100)
-        const float ampVib = 1.0f + 0.25f * vd * vs1;    // a little jaw pressure with it
+        const float vdj = vd * vibDepthJit;
+        pitch += vdj * (0.75f * vs1 - 0.25f);           // depth is in semitones (cents / 100)
+        const float ampVib = 1.0f + 0.25f * vdj * vs1;   // a little jaw pressure with it (louder at the top)
 
         outPitch = pitch;
         if (sounding && ! pending) lastPitch = played + fold;
