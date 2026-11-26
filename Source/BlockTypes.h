@@ -652,6 +652,9 @@ private:
     // analysis filter bank (mic after echo cancelling, and the speaker reference for the bleed filter)
     ndsp::Biquad anMic[numBands], anRef[numBands];
     float eMic[numBands] {}, eRef[numBands] {}, leak[numBands] {}, target[numBands] {};
+    float bandC[numBands] {}, lastShaped[numBands] {};
+    float holdLeft = 0, likeSm = 0, breathPow = 0, breathDb = -120, breathC = 0.01f;
+    ndsp::Biquad breathHP, breathHP2, breathLP;
     // the guitar side: Heil voicing, then the same bands with your mouth's gains
     ndsp::Biquad hp, lp1, lp2, presence, tube, carrier[numBands][2];
     ndsp::DelayLine tubeLine;

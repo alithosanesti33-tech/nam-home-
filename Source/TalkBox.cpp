@@ -64,6 +64,10 @@ void TalkBoxBlock::prepare (double sr, int)
     for (auto& f : micAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
     for (auto& f : refAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
     micHP.set (Biquad::Type::HighPass, (float) sr, 100.0f, 0.707f);
+    breathHP.set (Biquad::Type::HighPass, aRate, 5000.0f, 0.707f);
+    breathHP2.set (Biquad::Type::HighPass, aRate, 5000.0f, 0.707f);
+    breathLP.set (Biquad::Type::LowPass, aRate, 0.45f * aRate, 0.707f);
+    breathC = 1.0f - std::exp (-1.0f / (0.01f * aRate));
     aecTaps = (int) std::lround (0.064f * aRate);            // speaker-to-mic paths up to 64 ms
     aecW.assign ((size_t) aecTaps, 0.0f);
     aecX.assign ((size_t) aecTaps * 2, 0.0f);
@@ -72,6 +76,10 @@ void TalkBoxBlock::prepare (double sr, int)
     {
         const float fc = std::min (bandFreq (b), 0.44f * aRate);
         anMic[b].set (Biquad::Type::BandPass, aRate, fc, 4.0f);
+        // a whisper is noise: each band is read over ~2 cycles of its bandwidth (at least 8 ms), so the
+        // reading is steady instead of flickering (the flicker is what sounded choppy and warbly)
+        const float bw = fc / 4.0f;
+        bandC[b] = 1.0f - std::exp (-1.0f / (std::max (0.008f, 2.0f / bw) * aRate));
         anRef[b].set (Biquad::Type::BandPass, aRate, fc, 4.0f);
         carrier[b][0].set (Biquad::Type::BandPass, (float) sr, bandFreq (b), 3.2f);
         carrier[b][1].set (Biquad::Type::BandPass, (float) sr, bandFreq (b), 3.2f);
@@ -120,7 +128,9 @@ void TalkBoxBlock::reset()
         eMic[b] = eRef[b] = leak[b] = 0;
         target[b] = gain[b] = gainSm[b] = closed[b];
     }
-    open = openSm = 0; whisperDb = -100; floorDb = -60; limEnv = 0; decimCount = 0;
+    open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
+    breathHP.reset(); breathHP2.reset(); breathLP.reset();
+    for (int b = 0; b < numBands; ++b) lastShaped[b] = 1.0f; limEnv = 0; decimCount = 0;
 }
 
 // one analysis-rate sample: echo cancel, bands, and every ~2 ms a new mouth shape
@@ -145,7 +155,7 @@ void TalkBoxBlock::analyse (float mic, float ref)
             // whisper never gets learned as "speaker"
             if (refPow > 1.0e-7f)
             {
-                const float mu = (! aecLearned ? 0.5f : (open > 0.5f ? 0.005f : 0.15f)) * e / (refPow + 1.0e-6f);
+                const float mu = (! aecLearned ? 0.5f : (open > 0.5f ? 0.03f : 0.15f)) * e / (refPow + 1.0e-6f);
                 for (int k = 0; k < aecTaps; ++k) aecW[(size_t) k] += mu * x[k];
             }
         }
@@ -168,13 +178,16 @@ void TalkBoxBlock::analyse (float mic, float ref)
     // bands: your mouth (after echo cancelling) and the speakers (lined up with their echo)
     const int hs = (int) refHist.size();
     const float refD = refHist[(size_t) (((refHistPos - 1 - echoDelay) % hs + hs) % hs)];
-    const float att = 1.0f - std::exp (-1.0f / (0.003f * aRate)), rel = 1.0f - std::exp (-1.0f / (0.012f * aRate));
+    {
+        const float hb = breathLP.process (breathHP2.process (breathHP.process (e)));
+        breathPow += breathC * (hb * hb - breathPow);
+    }
     for (int b = 0; b < numBands; ++b)
     {
         const float m = anMic[b].process (e), r = anRef[b].process (refD);
         const float pm = m * m, pr = r * r;
-        eMic[b] += (pm > eMic[b] ? att : rel) * (pm - eMic[b]);
-        eRef[b] += (pr > eRef[b] ? att : rel) * (pr - eRef[b]);
+        eMic[b] += bandC[b] * (pm - eMic[b]);
+        eRef[b] += bandC[b] * (pr - eRef[b]);
     }
 
     if (++delayCount >= (int) aRate / 2 && aec)   // twice a second: where is the speakers' echo?
@@ -206,23 +219,34 @@ void TalkBoxBlock::analyse (float mic, float ref)
     micLevelDb = whisperDb;
     // the room's floor: falls quickly to the quietest moments, rises only slowly (~5 s), so it settles
     // on what your speakers and the room leave in the mic between your words
-    const float wF = std::max (whisperDb, -90.0f);   // a moment of total silence isn't the room's level
+    // The gate listens to the breath band (above ~5 kHz): your whisper's breath and "s" sounds live
+    // there, while the talk box's own sound (Heil low-pass, then the cab) has almost nothing there.
+    // So the speakers can't open it, however loud, and it can't lock itself open.
+    breathDb = 10.0f * std::log10 (breathPow + 1.0e-12f);
+    const float wF = std::max (breathDb, -100.0f);   // a moment of total silence isn't the room's level
     // (while it's learning your speakers it follows the leftover directly, so it starts at the right level)
     if (aec && ! aecLearned) floorDb += 0.05f * (wF - floorDb);
     else                     floorDb += (wF < floorDb ? 0.01f : 0.0004f) * (wF - floorDb);
-    const float thr = std::max (-85.0f, floorDb + p (tGate));
+    const float thr = std::max (-95.0f, floorDb + p (tGate));
     if (aec && ! aecLearned) { open = 0.0f; status = 4; }
     else
     {
-        if (whisperDb > thr + 3.0f) open = 1.0f;
-        else if (whisperDb < thr) open = 0.0f;
+        if (breathDb > thr + 3.0f) { open = 1.0f; holdLeft = 0.18f; }
+        else
+        {
+            holdLeft -= 0.001f;                                         // a hop is 1 ms
+            if (holdLeft <= 0.0f && breathDb < thr) open = 0.0f;       // closes ~180 ms after you stop
+        }
         status = open > 0.5f ? 1 : 0;
     }
+
+    // the mouth opens in ~10 ms and closes over ~80 ms, like a real mouth, never in one step
+    openSm += (open > openSm ? 0.1f : 0.0125f) * (open - openSm);
 
     // mouth shape: each band relative to the average, sharpened by Clarity, then a light smoothing
     // across neighbouring bands (a mouth's resonances are broad)
     const float mean = total / numBands + 1.0e-12f;
-    const float ex = 0.5f * (0.4f + 1.2f * p (tClarity) * 0.01f);
+    const float ex = 0.5f * (0.6f + 2.6f * p (tClarity) * 0.01f);   // 70% = strong, 100% = extreme
     float a[numBands], rms = 0;
     for (int b = 0; b < numBands; ++b) { a[b] = std::pow (clean[b] / mean + 1.0e-4f, ex); rms += a[b] * a[b]; }
     rms = std::sqrt (rms / numBands) + 1.0e-9f;
@@ -230,8 +254,10 @@ void TalkBoxBlock::analyse (float mic, float ref)
     for (int b = 0; b < numBands; ++b)
     {
         const float l = a[std::max (0, b - 1)], r = a[std::min (numBands - 1, b + 1)];
-        const float shaped = (0.25f * l + 0.5f * a[b] + 0.25f * r) / rms;
-        target[b] = open > 0.5f ? shaped : closed[b] * cl;
+        const float shaped = (0.15f * l + 0.7f * a[b] + 0.15f * r) / rms;
+        lastShaped[b] = open > 0.5f ? shaped : lastShaped[b];   // when you stop, it closes from your last shape
+        lastShaped[b] = std::min (lastShaped[b], 4.0f);
+        target[b] = openSm * lastShaped[b] + (1.0f - openSm) * closed[b] * cl;
         if (aec && ! aecLearned) target[b] = 0.7f;   // learning: full range, so every frequency gets learned
     }
 }
@@ -251,7 +277,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
     lp1.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.6f);
     lp2.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.6f);
-    const float gC = 1.0f - std::exp (-1.0f / (0.003f * sampleRate));
+    const float gC = 1.0f - std::exp (-1.0f / (0.006f * sampleRate));
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
     auto& ring = OutputRing::get();
