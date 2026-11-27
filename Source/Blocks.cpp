@@ -267,6 +267,9 @@ juce::String Block::typeName (Type t)
         case Type::Drums:        return "Drums";
         case Type::TalkBox:      return "Talk box";
         case Type::BackingTrack: return "Backing track";
+        case Type::TwelveString: return "12-string";
+        case Type::Granular:     return "Granular";
+        case Type::Acoustic:     return "Acoustic sim";
         case Type::NumTypes:     break;
     }
     return {};
@@ -279,9 +282,33 @@ juce::String Block::categoryName (Type t)
         case Type::NamAmp: return "Amps";
         case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor:
         case Type::Whammy: case Type::Octave: case Type::EnvFilter: case Type::Swell: case Type::Fuzz: case Type::ATDrive: return "Pedals";
+        case Type::TwelveString: case Type::Acoustic: return "Guitar sims";
         case Type::Cab: return "Cabs";
         case Type::GraphicEQ: case Type::ParametricEQ: return "EQ";
         case Type::Gate: case Type::Utility: return "Utility";
+        case Type::PhatTrack: return "Synthesizers";
+        case Type::Sax: return "Saxophone";
+        case Type::Looper: case Type::Drums: case Type::BackingTrack: return "Looper & drums";
+        default: return "Effects";
+    }
+}
+
+juce::String Block::libraryGroup (Type t)
+{
+    switch (t)
+    {
+        case Type::NamAmp: return "Amps";
+        case Type::Cab: return "Cabs";
+        case Type::NamPedal: case Type::Drive: case Type::Fuzz: case Type::ATDrive: return "Drive";
+        case Type::Gate: case Type::Compressor: case Type::Swell: case Type::Volume:
+        case Type::GraphicEQ: case Type::ParametricEQ: case Type::Utility: return "Dynamics & EQ";
+        case Type::Wah: case Type::EnvFilter: case Type::TalkBox: return "Wah, filters & talk box";
+        case Type::Whammy: case Type::Octave: case Type::Harmonizer: return "Pitch";
+        case Type::Chorus: case Type::TriChorus: case Type::Phaser: case Type::Flanger: case Type::Doubler:
+        case Type::Tremolo: case Type::Vibrato: case Type::Rotary: case Type::Vibe: return "Modulation";
+        case Type::Delay: return "Delay";
+        case Type::Reverb: case Type::Freeze: case Type::Granular: return "Reverb & ambient";
+        case Type::TwelveString: case Type::Acoustic: return "Guitar sims";
         case Type::PhatTrack: return "Synthesizers";
         case Type::Sax: return "Saxophone";
         case Type::Looper: case Type::Drums: case Type::BackingTrack: return "Looper & drums";
@@ -349,6 +376,9 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::Vibe:         return std::make_unique<VibeBlock>();
         case Type::TalkBox:      return std::make_unique<TalkBoxBlock>();
         case Type::BackingTrack: return std::make_unique<BackingTrackBlock>();
+        case Type::TwelveString: return std::make_unique<TwelveStringBlock>();
+        case Type::Granular:     return std::make_unique<GranularBlock>();
+        case Type::Acoustic:     return std::make_unique<AcousticBlock>();
         case Type::Looper:       return std::make_unique<LooperBlock>();
         case Type::Drums:        return std::make_unique<DrumsBlock>();
         case Type::NumTypes:     break;
@@ -396,6 +426,9 @@ juce::Colour Block::colourFor (Type t, int v)
         case Type::Wah: case Type::Volume: return juce::Colour (0xff2b2b30);
         case Type::Reverb:     return juce::Colour (0xffc56be2);
         case Type::Freeze:     return juce::Colour (0xff8fd3ff);
+        case Type::TwelveString: return juce::Colour (0xffc9a56a);
+        case Type::Acoustic:   return juce::Colour (0xffd8a65b);
+        case Type::Granular:   return juce::Colour (0xff7d6bd9);
         default:               return colour (t);
     }
 }

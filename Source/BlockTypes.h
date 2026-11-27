@@ -720,9 +720,16 @@ protected:
     void reset() override { pos = 0; }
     void process (float* L, float* R, int n) override;
 private:
-    void run() override;   // loads the chosen track in the background
-    struct Track { std::vector<float> l, r; juce::String name; };
+    void run() override;   // loads the chosen track (and stretches it for Speed / Key) in the background
+    struct Track { std::vector<float> l, r; juce::String name; float speed = 1, key = 0; };
+    std::shared_ptr<Track> render (const Track& src, float speed, float semis);   // nullptr if cut short
     std::shared_ptr<Track> track;           // swapped with std::atomic_load / store
+    std::shared_ptr<Track> stretched;       // the track at the chosen speed and key
+    std::atomic<float> wantSpeed { 1.0f }, wantKey { 0.0f }, posSec { 0.0f }, lenSec { 0.0f };
+    float lastSpeed = 1, lastKey = 0;
+    int stableFor = 0;
+    bool lastSetA = false, lastSetB = false, lastBack = false, lastFwd = false;
+    float jumpFade = 1;
     juce::StringArray files;                // the folder's tracks when this block was made
     std::atomic<int> wanted { -1 }, loaded { -1 };
     std::atomic<double> loadRate { 48000.0 };
@@ -731,3 +738,104 @@ private:
     juce::String savedName;
 };
 
+
+// 12-string: adds the octave strings (on the low register) and the slightly-out unison pairs.
+class TwelveStringBlock : public Block
+{
+public:
+    TwelveStringBlock();
+    std::vector<StartingPoint> startingPoints() const override;
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    ndsp::Biquad split[2], octHp, octShelf, octLp, uniHp;
+    ndsp::PitchShifter shift;
+    ndsp::DelayLine octLine, uniLine;
+    float uniPh[2] { 0.0f, 0.37f };
+    float lastSplit = -1, lastTone = -100;
+};
+
+// Granular (Microcosm / Chase Bliss style): Clouds, Glitch, Swell freeze, Slip / reverse, Memory echo.
+class GranularBlock : public Block
+{
+public:
+    GranularBlock();
+    std::vector<StartingPoint> startingPoints() const override;
+    bool hasTails() const override { return true; }
+    bool canCutTail() const override { return ! holding; }
+    juce::String getSubtitle() const override;
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    struct Grain
+    {
+        bool on = false;
+        int source = 0;          // 0 = the recording ring, 1 / 2 = a captured swell note
+        double pos = 0;          // read position (absolute samples, or into the note)
+        float rate = 1, len = 1, t = 0, fade = 0.5f;   // fade: fraction of the grain used for each fade (0.5 = Hann)
+        float gl = 1, gr = 1, amp = 1, kill = 1;
+    };
+    static constexpr int maxGrains = 48;
+    Grain grains[maxGrains];
+    void spawn (int source, double pos, float rate, float lenSamples, float fade, float pan, float amp);
+    float readRing (double absPos) const;
+    float readNote (int slot, double pos) const;
+    float rnd() { seed = seed * 1664525u + 1013904223u; return (float) (seed >> 8) * (1.0f / 16777216.0f); }   // 0..1
+    juce::uint32 seed = 0x2468ace1u;
+
+    std::vector<float> ring;  // mono memory, ~62 s
+    juce::int64 now = 0;      // samples written so far
+    int ringLen = 1;
+    bool holding = false, lastHold = false, slipSide = false;
+    float spawnWait = 0, fbSample = 0;
+
+    // glitch
+    bool glitching = false;
+    juce::int64 sliceStart = 0;
+    float sliceLen = 0, repWait = 0, beatWait = 0, dryDuck = 1;
+    int repsLeft = 0;
+
+    // swell freeze
+    std::vector<float> note[2];
+    int noteLen[2] { 0, 0 }, activeSlot = -1;
+    float slotGain[2] { 0, 0 }, slotTarget[2] { 0, 0 };
+    ndsp::Envelope envFast, envSlow;
+    juce::int64 lastOnset = -1000000, capStart = -1;
+    int capLen = 0;
+
+    ndsp::Allpass ap[2][4];
+    ndsp::Biquad toneLp[2], wetHp[2];
+    float lastTone = -1;
+};
+
+// Acoustic sim (Boss AC-3 style): electric pickup to acoustic body, with a room around it.
+class AcousticBlock : public Block
+{
+public:
+    AcousticBlock();
+    std::vector<StartingPoint> startingPoints() const override;
+    bool hasTails() const override { return true; }
+protected:
+    void prepare (double sr, int maxBlock) override;
+    void reset() override;
+    void process (float* L, float* R, int n) override;
+private:
+    void design();
+    ndsp::Biquad hp, pickupMid, pickupPeak, air, modes[4], quack, top, lowShelf;
+    ndsp::Envelope envFast, envSlow;
+    ndsp::Biquad attackHp;
+    ndsp::DelayLine body[4];
+    float bodyLen[4] {}, bodyZ[4] {};
+    float comp = 1, peakEnv = 0, curEnv = 0;
+    // room: early reflections + a short soft tail
+    ndsp::DelayLine early[2];
+    ndsp::Allpass roomAp[2][3];
+    ndsp::DelayLine roomLine[4];
+    float roomLen[4] {}, roomZ[4] {}, roomPh[4] {};
+    ndsp::Biquad roomHp[2];
+    float lastKey = -1;
+};

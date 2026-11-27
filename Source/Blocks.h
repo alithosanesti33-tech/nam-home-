@@ -92,7 +92,7 @@ public:
     {
         NamAmp, NamPedal, Cab, Gate, Compressor, Drive, Wah, Volume,
         GraphicEQ, ParametricEQ, Delay, Reverb, TriChorus, Utility, PhatTrack, Sax,
-        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, TalkBox, BackingTrack, NumTypes
+        Chorus, Phaser, Flanger, Whammy, Octave, Harmonizer, EnvFilter, Swell, Doubler, Fuzz, ATDrive, Freeze, Tremolo, Vibrato, Rotary, Vibe, Looper, Drums, TalkBox, BackingTrack, TwelveString, Granular, Acoustic, NumTypes
     };
 
     explicit Block (Type t);
@@ -101,6 +101,7 @@ public:
     static std::unique_ptr<Block> create (Type t);
     static juce::String typeName (Type t);
     static juce::String categoryName (Type t);
+    static juce::String libraryGroup (Type t);   // section in the library and the add menu (Drive, Delay, Reverb & ambient...)
     static juce::Colour colour (Type t);
     static juce::Array<Type> allTypes();
 

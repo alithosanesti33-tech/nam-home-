@@ -50,6 +50,8 @@ target_sources(NAMHome PRIVATE
     Source/Instruments.cpp
     Source/TalkBox.cpp
     Source/BackingTrack.cpp
+    Source/Granular.cpp
+    Source/GuitarSims.cpp
     Source/NamBlocks.cpp
     Source/Engine.cpp
     Source/Tone3000.cpp

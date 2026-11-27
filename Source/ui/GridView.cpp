@@ -610,11 +610,12 @@ void GridView::mouseDoubleClick (const MouseEvent& e)
 void GridView::showAddMenu (Point<int> cell)
 {
     PopupMenu m;
-    StringArray cats { "Amps", "Pedals", "Cabs", "EQ", "Effects", "Synthesizers", "Saxophone", "Utility" };
+    StringArray cats { "Amps", "Cabs", "Drive", "Dynamics & EQ", "Wah, filters & talk box", "Pitch", "Modulation", "Delay",
+                       "Reverb & ambient", "Guitar sims", "Synthesizers", "Saxophone", "Looper & drums", "Effects" };
     std::map<String, PopupMenu> subs;
     for (auto t : Block::allTypes())
     {
-        const auto cat = Block::categoryName (t);
+        const auto cat = Block::libraryGroup (t);
         if (t == Block::Type::Sax)
         {
             for (int v = 0; v < 4; ++v) subs[cat].addItem (1000 + v, juce::String (ndsp::saxModel (v).name) + " sax");   // Soprano first
