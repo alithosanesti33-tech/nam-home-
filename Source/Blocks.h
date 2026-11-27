@@ -56,6 +56,9 @@ struct EngineContext
     std::atomic<double> hostBeats { -1.0 }; // Logic's song position in beats while playing, else -1
     // the looper tells the drums when a loop starts and stops ("Starts with the looper")
     std::atomic<int> looperStarts { 0 }, looperStops { 0 };
+    // the talk box's "dry while talking": delays and reverbs fade their echoes out (1 = normal, 0 = dry)
+    std::atomic<float> talkDuck { 1.0f };
+    std::atomic<int> talkStamp { 0 };   // goes up every block a talk box runs; if it stops, the echoes come back
 };
 
 // Spectrum analyzer taps: the audio thread copies a signal into a ring buffer the screen reads.

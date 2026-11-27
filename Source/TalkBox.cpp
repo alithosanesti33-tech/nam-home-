@@ -14,7 +14,8 @@ using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix, tCons, tFill, tRec };
+    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix, tCons, tFill, tRec,
+                tTalk, tDry, tDriver, tMicModel, tTubeLen, tFormant };
 
     // Levinson-Durbin: autocorrelation r[0..p] -> reflection coefficients k[0..p-1]
     void levinson (const double* r, int p, float* k)
@@ -68,9 +69,19 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox), juce::Thread ("NAM Home ta
     currentGroup = "Mic";
     addToggle ("rectest", "Record test clip", false);
     params[(size_t) tRec]->momentary = true;
+    currentGroup = "Footswitch";
+    // the talk box on and off (MIDI-learnable, fades in and out), and Frampton's dry talk box:
+    // while it's on, your Delay and Reverb blocks fade their echoes out so every word is clear
+    addToggle ("talk", "Talk box on", true);
+    addToggle ("drytalk", "Dry while talking", true);
+    currentGroup = "Character";
+    addChoice ("driver", "Driver", { "Heil (honky, gritty)", "MXR (tighter, brighter)", "Banshee (fat low mids)" }, 0);
+    addChoice ("micmodel", "Mic", { "SD-1", "SM57 style", "Ribbon", "Off" }, 0);
+    addFloat ("tubelen", "Tube length", 0.6f, 3.0f, 1.8f, "m", -1, 0.05f);
+    addFloat ("formant", "Formant", -30, 30, 0, "%", -1, 1);   // - = bigger/deeper, + = smaller/more nasal
 }
 
-TalkBoxBlock::~TalkBoxBlock() { stopThread (4000); }
+TalkBoxBlock::~TalkBoxBlock() { context().talkDuck = 1.0f; stopThread (4000); }
 
 juce::File TalkBoxBlock::testFolder()
 {
@@ -190,7 +201,8 @@ void TalkBoxBlock::reset()
     gOld = gNew = gClosed; interp = 0;
     artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
     fillBP.reset(); fillHP.reset(); fillLP.reset(); fillEnv = 0; lastRec = false;
-    carHold = outHold = 0; deEm = 0; consSample = consEnv = consTarget = 0; consHissRef = 1.0f; consHP.reset(); consHP2.reset(); dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
+    carHold = outHold = 0; deEm = 0; prevCar = lastMouth = 0; fPhase = 0; talkSm = 1.0f; lastDriver = lastMic = -1;
+    presence2.reset(); micEq1.reset(); micEq2.reset(); consSample = consEnv = consTarget = 0; consHissRef = 1.0f; consHP.reset(); consHP2.reset(); dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
     decimCount = hopCount = delayCount = 0;
 }
 
@@ -367,9 +379,8 @@ void TalkBoxBlock::newFrame()
 
 // one carrier sample at the analysis rate through the mouth (the reflection coefficients glide
 // from the last reading to the new one over the 4 ms, so it never clicks)
-float TalkBoxBlock::mouth (float x)
+float TalkBoxBlock::mouthStep (float x, float t)
 {
-    const float t = std::min (1.0f, (float) (++interp) / (float) hop);
     float f = x;
     for (int i = order - 1; i >= 0; --i)
     {
@@ -394,6 +405,38 @@ void TalkBoxBlock::process (float* L, float* R, int n)
 
     const float sens = dbToGain (p (tSens));
     const float drive = p (tDrive) * 0.01f, tubeAmt = p (tTube) * 0.01f;
+    const int driver = (int) p (tDriver), micModel = (int) p (tMicModel);
+    if (driver != lastDriver)
+    {
+        lastDriver = driver;
+        switch (driver)
+        {
+            case 1:  hp.set (Biquad::Type::HighPass, sampleRate, 180.0f, 0.707f); presence.set (Biquad::Type::Peak, sampleRate, 2500.0f, 0.9f, 3.0f); presence2.set (Biquad::Type::Peak, sampleRate, 600.0f, 0.8f, -1.5f); break;   // MXR
+            case 2:  hp.set (Biquad::Type::HighPass, sampleRate, 110.0f, 0.707f); presence.set (Biquad::Type::Peak, sampleRate, 1300.0f, 0.8f, 4.5f); presence2.set (Biquad::Type::Peak, sampleRate, 450.0f, 0.8f, 3.0f); break;   // Banshee
+            default: hp.set (Biquad::Type::HighPass, sampleRate, 140.0f, 0.707f); presence.set (Biquad::Type::Peak, sampleRate, 1800.0f, 0.8f, 4.0f); presence2.set (Biquad::Type::Peak, sampleRate, 700.0f, 0.8f, 0.0f); break;     // Heil
+        }
+    }
+    if (micModel != lastMic)
+    {
+        lastMic = micModel;
+        switch (micModel)
+        {
+            case 0:  micEq1.set (Biquad::Type::LowShelf, sampleRate, 250.0f, 0.7f, 2.5f); micEq2.set (Biquad::Type::Peak, sampleRate, 3000.0f, 0.9f, 1.5f); break;     // SD-1: close-mic warmth, a touch of presence
+            case 1:  micEq1.set (Biquad::Type::HighPass, sampleRate, 150.0f, 0.707f); micEq2.set (Biquad::Type::Peak, sampleRate, 4000.0f, 1.0f, 4.5f); break;   // SM57: tight lows, presence bump
+            case 2:  micEq1.set (Biquad::Type::LowShelf, sampleRate, 220.0f, 0.7f, 2.0f); micEq2.set (Biquad::Type::HighShelf, sampleRate, 3500.0f, 0.7f, -5.0f); break;   // ribbon: warm and dark
+            default: micEq1.set (Biquad::Type::Peak, sampleRate, 1000.0f, 0.7f, 0.0f); micEq2.set (Biquad::Type::Peak, sampleRate, 1000.0f, 0.7f, 0.0f); break;
+        }
+    }
+    // the footswitch, and Frampton's dry talk box (the delays and reverbs fade out while it's on)
+    const bool talkOn = p (tTalk) > 0.5f;
+    const float talkC = 1.0f / (0.03f * sampleRate);
+    context().talkDuck = (talkOn && p (tDry) > 0.5f) ? 0.0f : 1.0f;
+    context().talkStamp = context().talkStamp.load() + 1;
+    // tube length: the tube's resonances and how dark it is
+    const float tubeLen = p (tTubeLen);
+    tube.set (Biquad::Type::LowPass, sampleRate, 3000.0f * std::sqrt (1.8f / tubeLen), 0.5f);
+    // formant shift: the mouth filter runs a little faster or slower than the guitar
+    formantRatio = std::exp2 (p (tFormant) * 0.01f);
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
     const float closedLv = 0.3f + 0.7f * p (tClosed) * 0.01f;
     const float consAmt = p (tCons) * 0.01f;
@@ -408,7 +451,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     outLP[0].set (Biquad::Type::LowPass, sampleRate, std::min (1.15f * tone, 5600.0f), 0.54f);
     outLP[1].set (Biquad::Type::LowPass, sampleRate, std::min (1.15f * tone, 5600.0f), 1.31f);
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
-    const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
+    const float tubeDelay = 2.0f * tubeLen / 343.0f * sampleRate;   // there and back down the tube
     const float lmC = 1.0f / (0.3f * sampleRate);
     const float artC = 1.0f - std::exp (-1.0f / (0.002f * sampleRate));
     auto& ring = OutputRing::get();
@@ -431,7 +474,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             const float g = clamp (10.0f * v / (fillEnv + 1.0e-6f) + 3.0f * fb / (fillEnv + 1.0e-6f), -1.0f, 1.0f) * fillEnv * 1.2f;
             v += fillAmt * 4.0f * fillLP.process (fillHP.process (g));
         }
-        v = lp2.process (lp1.process (presence.process (v)));
+        v = lp2.process (lp1.process (presence2.process (presence.process (v))));
         const float back = tube.process (tubeLine.read (tubeDelay));
         v = v + 0.45f * tubeAmt * back;
         tubeLine.push (v);
@@ -447,7 +490,20 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         {
             decimCount = 0;
             analyse (m, ref);
-            float mo = mouth (car);
+            // formant shift: the mouth filter runs at formantRatio x the guitar's rate (resampled
+            // in and out), which moves every resonance by that ratio without changing your notes
+            const float t = std::min (1.0f, (float) (++interp) / (float) hop);
+            float mo = 0; int made = 0;
+            fPhase += formantRatio;
+            while (fPhase >= 1.0f)
+            {
+                fPhase -= 1.0f;
+                const float frac = 1.0f - fPhase / std::max (1.0e-3f, formantRatio);
+                lastMouth = mouthStep (prevCar + (car - prevCar) * clamp (frac, 0.0f, 1.0f), t);
+                mo += lastMouth; ++made;
+            }
+            mo = made > 0 ? mo / (float) made : lastMouth;
+            prevCar = car;
             deEm = mo + 0.4f * deEm;             // undo the analysis pre-emphasis: words sit in the mids
             mo = deEm * 0.6f;
             outHold = mo * (closedLv + (1.0f - closedLv) * openSm);
@@ -464,7 +520,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         // the Heil's roll-off after the mouth too: nothing comes out above ~5.6 kHz, which is also
         // where the gate listens for your breath, so the talk box can never hold the gate open
         y = outLP[1].process (outLP[0].process (y));
-        y = proximity.process (y);
+        y = micEq2.process (micEq1.process (y));
 
         // articulation: the whole sound dips on your consonants and syllable gaps
         artSm += artC * (artGain - artSm);
@@ -485,8 +541,11 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         limEnv = a > limEnv ? a : limEnv + limRel * (a - limEnv);
         if (limEnv > 0.9f) y *= 0.9f / limEnv;
 
-        L[i] = y * mix + dryL * (1.0f - mix);
-        R[i] = y * mix + dryR * (1.0f - mix);
+        talkSm += (talkOn ? talkC : -talkC);
+        talkSm = clamp (talkSm, 0.0f, 1.0f);
+        const float wet = mix * talkSm;
+        L[i] = y * wet + dryL * (1.0f - wet);
+        R[i] = y * wet + dryR * (1.0f - wet);
 
         if (recState.load() == 1)
         {

@@ -539,8 +539,15 @@ void DelayBlock::process (float* L, float* R, int n)
     const float pitchMix = p (19) * 0.01f;
     const float baseD = ms * 0.001f * sampleRate;
     const float fb = std::min (p (3) * 0.01f, (kind == Tape || kind == Analog) ? 1.1f : 0.98f);
-    const float mix = p (4) * 0.01f;
     const bool killDry = p (16) > 0.5f;
+    // the talk box can fade the echoes out while you talk (the repeats keep running underneath)
+    {
+        const int st = context().talkStamp.load();
+        duckStale = st == duckStamp ? duckStale + 1 : 0;
+        duckStamp = st;
+    }
+    duckSm += 0.15f * ((killDry || duckStale > 8 ? 1.0f : context().talkDuck.load()) - duckSm);
+    const float mix = p (4) * 0.01f * duckSm;
     const float modDepth = p (7) * 0.01f, wowAmt = p (9) * 0.01f, flutAmt = p (10) * 0.01f;
     const float sat = p (11) * 0.01f, ageAmt = p (12) * 0.01f, ratio = p (13) * 0.01f, spread = p (14) * 0.01f;
     const float swellCoef = 1.0f / std::max (1.0f, p (15) * 0.001f * sampleRate);
@@ -762,8 +769,14 @@ void ReverbBlock::process (float* L, float* R, int n)
     const float preS = std::max (1.0f, p (2) * 0.001f * sampleRate);
     float hc = p (4);
     if (kind == Plate) hc = std::min (16000.0f, hc * 1.5f);
-    const float mix = p (6) * 0.01f;
     const bool killDry = p (14) > 0.5f;
+    {
+        const int st = context().talkStamp.load();
+        duckStale = st == duckStamp ? duckStale + 1 : 0;
+        duckStamp = st;
+    }
+    duckSm += 0.15f * ((killDry || duckStale > 8 ? 1.0f : context().talkDuck.load()) - duckSm);   // talk box: dry while talking
+    const float mix = p (6) * 0.01f * duckSm;
     const float modAmt = p (7) * 0.01f * (kind == Ambient ? 2.0f : 1.0f);
     const float diffG = 0.45f + 0.3f * p (8) * 0.01f;
     static const float ratios[8] = { 2.0f, 1.5f, 4.0f, 0.5f, 1.33484f, 1.12246f, 0.66742f, 1.00696f };

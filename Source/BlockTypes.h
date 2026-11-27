@@ -222,6 +222,7 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
+    float duckSm = 1.0f; int duckStamp = 0, duckStale = 100;
     ndsp::DelayLine line[2];
     ndsp::Biquad fbLow[2], fbHigh[2], headBump[2];
     ndsp::OnePole age[2];
@@ -248,6 +249,7 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
+    float duckSm = 1.0f; int duckStamp = 0, duckStale = 100;
     static constexpr int N = 8;
     void configure (int kind, float size);
     ndsp::DelayLine pre, fdn[N];
@@ -642,7 +644,7 @@ private:
     void run() override;                   // writes a finished test clip
     void analyse (float mic, float ref);   // one sample at the analysis rate (~16 kHz)
     void newFrame();                       // every 4 ms: read the mouth from the last 16 ms
-    float mouth (float carrier);           // one carrier sample through the mouth filter (analysis rate)
+    float mouthStep (float carrier, float glide);   // one carrier sample through the mouth filter
 
     int decim = 3, decimCount = 0, hopCount = 0, delayCount = 0;
     float aRate = 16000.0f;
@@ -679,7 +681,9 @@ private:
     ndsp::Biquad hp, lp1, lp2, presence, tube, proximity;
     ndsp::DelayLine tubeLine;
     float carHold = 0, outHold = 0, deEm = 0;
-    ndsp::Biquad fillBP, fillHP, fillLP;
+    ndsp::Biquad fillBP, fillHP, fillLP, presence2, micEq1, micEq2;
+    float prevCar = 0, lastMouth = 0, fPhase = 0, formantRatio = 1.0f, talkSm = 1.0f;
+    int lastDriver = -1, lastMic = -1;
     float fillEnv = 0, fillEnvC = 0.001f;
     std::vector<float> recMic, recDry, recOut;
     int recLen = 0; double recRate = 48000.0;
