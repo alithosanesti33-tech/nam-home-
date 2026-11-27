@@ -16,7 +16,7 @@ using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix, tBody, tSweep };
+    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix, tBody, tSweep, tArtic };
     constexpr float bandLo = 150.0f, bandHi = 6000.0f;
     inline float bandFreq (int b) { return bandLo * std::pow (bandHi / bandLo, (float) b / (float) (TalkBoxBlock::numBands - 1)); }
 }
@@ -32,7 +32,7 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addToggle ("aec3", "Echo cancel", true);
     addFloat ("bleed3", "Bleed cut", 0, 100, 0, "%", -1, 1);
     currentGroup = "Talk box";
-    addFloat ("clarity4", "Clarity", 0, 100, 85, "%", -1, 1);   // new id: blocks already placed get the new default
+    addFloat ("clarity5", "Clarity", 0, 100, 90, "%", -1, 1);   // new id: blocks already placed get the new default
     addFloat ("tone2", "Tone", 1500, 9000, 5500, "Hz", 4500, 10);
     addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
@@ -46,6 +46,9 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     // the mouth opening, like a real talk box: dark and muffled on "w"/"oo", blooming up into the
     // treble as you spread your mouth into "ahh"/"eee"
     addFloat ("opening2", "Mouth opening", 0, 100, 50, "%", -1, 1);
+    // enunciation: the sound dips on your consonant stops (t, k, p, b) and the gaps between
+    // syllables and pops back on the next one, so words come through as words
+    addFloat ("artic", "Articulation", 0, 100, 70, "%", -1, 1);
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
@@ -76,6 +79,9 @@ void TalkBoxBlock::prepare (double sr, int)
     breathLP.set (Biquad::Type::LowPass, aRate, 0.45f * aRate, 0.707f);
     refBHP = breathHP; refBHP2 = breathHP2; refBLP = breathLP;
     breathC = 1.0f - std::exp (-1.0f / (0.01f * aRate));
+    artBP.set (Biquad::Type::BandPass, aRate, 1200.0f, 0.35f);
+    artFC = 1.0f - std::exp (-1.0f / (0.003f * aRate));
+    artSC = 1.0f - std::exp (-1.0f / (0.06f * aRate));
     aecTaps = (int) std::lround (0.064f * aRate);            // speaker-to-mic paths up to 64 ms
     aecW.assign ((size_t) aecTaps, 0.0f);
     aecX.assign ((size_t) aecTaps * 2, 0.0f);
@@ -87,7 +93,7 @@ void TalkBoxBlock::prepare (double sr, int)
         // a whisper is noise: each band is read over ~2 cycles of its bandwidth (at least 8 ms), so the
         // reading is steady instead of flickering (the flicker is what sounded choppy and warbly)
         const float bw = fc / 4.0f;
-        bandC[b] = 1.0f - std::exp (-1.0f / (std::max (0.008f, 2.0f / bw) * aRate));
+        bandC[b] = 1.0f - std::exp (-1.0f / (std::max (0.004f, 1.5f / bw) * aRate));   // fast where consonants live
         anRef[b].set (Biquad::Type::BandPass, aRate, fc, 4.0f);
         carrier[b][0].set (Biquad::Type::BandPass, (float) sr, bandFreq (b), 3.2f);
         carrier[b][1].set (Biquad::Type::BandPass, (float) sr, bandFreq (b), 3.2f);
@@ -130,7 +136,7 @@ void TalkBoxBlock::reset()
     for (auto& f : micAA) f.reset();
     for (auto& f : refAA) f.reset();
     bodyLP.reset(); bodyLP2.reset(); proximity.reset(); sweepPeak.reset(); sweepLP.reset();
-    sweepPos = sweepSm = 0; sweepCount = 0;
+    sweepPos = sweepSm = 0; sweepCount = 0; artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
     tmLoDb = 0; tmHiDb = 0; tmCount = 0; for (auto& e : tmE) e = 0;
     tmDryLo.reset(); tmWetLo.reset(); tmDryHi.reset(); tmWetHi.reset(); tmLoShelf.reset(); tmHiShelf.reset();
     micHP.reset(); hp.reset(); lp1.reset(); lp2.reset(); presence.reset(); tube.reset(); tubeLine.clear();
@@ -201,6 +207,11 @@ void TalkBoxBlock::analyse (float mic, float ref)
     // bands: your mouth (after echo cancelling) and the speakers (lined up with their echo)
     const int hs = (int) refHist.size();
     const float refD = refHist[(size_t) (((refHistPos - 1 - echoDelay) % hs + hs) % hs)];
+    {
+        const float vb = artBP.process (e);   // 300 Hz - 5 kHz of your whisper
+        artFast += artFC * (vb * vb - artFast);
+        artSlow += artSC * (vb * vb - artSlow);
+    }
     {
         const float hb = breathLP.process (breathHP2.process (breathHP.process (e)));
         breathPow += breathC * (hb * hb - breathPow);
@@ -282,6 +293,18 @@ void TalkBoxBlock::analyse (float mic, float ref)
         status = open > 0.5f ? 1 : 0;
     }
 
+    // articulation: your whisper right now (~4 ms) against the last ~50 ms. A stop consonant or a gap
+    // between syllables drops it, and the sound dips with it; the next syllable pops it back.
+    // (read straight from your echo-cancelled whisper, which reacts within ~3 ms)
+    {
+        // the room's own leftover in that band (learned between your words) is taken out first,
+        // so loud speakers don't fill in your gaps
+        if (open < 0.5f) artFloor += (artFast < artFloor ? 0.05f : 0.002f) * (artFast - artFloor);
+        const float f = std::max (0.0f, artFast - 1.5f * artFloor), sl = std::max (1.0e-12f, artSlow - 1.5f * artFloor);
+        const float r = open > 0.5f ? clamp (std::sqrt (f / sl), 0.1f, 1.35f) : 1.0f;
+        artGain = 1.0f + p (tArtic) * 0.01f * (r - 1.0f);
+    }
+
     // the mouth opens in ~10 ms and closes over ~80 ms, like a real mouth, never in one step
     openSm += (open > openSm ? 0.1f : 0.0125f) * (open - openSm);
 
@@ -342,11 +365,13 @@ void TalkBoxBlock::analyse (float mic, float ref)
     for (int b = 0; b < numBands; ++b)
     {
         const float shaped = body + (1.0f - body) * sm[b] / rms;
-        if (open > 0.5f)
+        // only while you're actually making sound: in the tiny gaps between syllables there's no
+        // whisper to read, so the last real mouth shape is kept (and Articulation dips the level)
+        if (open > 0.5f && artFast - 1.5f * artFloor > 0.2f * (artSlow - 1.5f * artFloor))
         {
             // tone balance: over a few seconds the talk box keeps your guitar's own treble/mids/bass,
             // so what changes the sound is only your mouth moving, not a constant tilt
-            longTerm[b] += 0.0005f * (shaped - longTerm[b]);
+            longTerm[b] += 0.00015f * (shaped - longTerm[b]);   // ~7 s, so a held vowel keeps its colour
             lastShaped[b] = clamp (shaped / std::max (0.05f, longTerm[b]), 0.0f, 4.0f) * bloom;
         }
         target[b] = openSm * lastShaped[b] + (1.0f - openSm) * closed[b] * cl;
@@ -369,10 +394,11 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
     lp1.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.65f);
     lp2.set (Biquad::Type::LowPass, sampleRate, std::min (1.25f * p (tTone), 0.45f * sampleRate), 0.7f);   // steep above the Tone, like a Heil
-    const float gC = 1.0f - std::exp (-1.0f / (0.006f * sampleRate));
+    const float gC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
     const float lmC = 1.0f / (0.3f * sampleRate);
+    const float artC = 1.0f - std::exp (-1.0f / (0.002f * sampleRate));
     const float tmC = 1.0f / (2.0f * sampleRate);
     const float sweepSmC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
     const float bodyAmt = p (tBody) * 0.01f;
@@ -452,9 +478,13 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             y = tmHiShelf.process (tmLoShelf.process (y));
         }
 
+        // articulation last, so the whole sound (body included) dips on your consonants and gaps
+        artSm += artC * (artGain - artSm);   // ~2 ms, so the dips are crisp but click-free
+        y *= artSm;
+
         // level match (slow, ~0.3 s): while your mouth is open, the talk box is as loud as the
         // guitar going into it, so switching it on never drops your volume
-        if (openSm > 0.5f)
+        if (openSm > 0.5f && artSm > 0.8f)   // the articulation dips don't count, so they stay dips
         {
             const float d = 0.5f * (dryL + dryR);
             dryE += lmC * (d * d - dryE);

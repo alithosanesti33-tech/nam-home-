@@ -660,6 +660,9 @@ private:
     // the guitar side: Heil voicing, then the same bands with your mouth's gains
     ndsp::Biquad hp, lp1, lp2, presence, tube, carrier[numBands][2], bodyLP, bodyLP2, proximity, sweepPeak, sweepLP;
     float sweepPos = 0, sweepSm = 0; int sweepCount = 0;
+    float artFloor = 0;
+    float artFast = 0, artSlow = 0, artGain = 1.0f, artSm = 1.0f, artFC = 0.3f, artSC = 0.01f;
+    ndsp::Biquad artBP;
     ndsp::Biquad tmDryLo, tmDryHi, tmWetLo, tmWetHi, tmLoShelf, tmHiShelf;
     float tmE[6] {}, tmLoDb = 0, tmHiDb = 0; int tmCount = 0;
     ndsp::DelayLine tubeLine;
