@@ -390,6 +390,14 @@ void IconButton::paintButton (Graphics& g, bool over, bool down)
             p.addCentredArc (a.getCentreX(), a.getBottom() - 3, 8, 8, 0, -1.3f, 1.3f, false);
             p.startNewSubPath (a.getCentreX(), a.getBottom() - 3); p.lineTo (a.getCentreX() + 3, a.getY() + 3);
             break;
+        case Icon::Info:
+        {
+            // an "i" in a circle
+            p.addEllipse (a.reduced (0.5f));
+            p.startNewSubPath (a.getCentreX(), a.getCentreY() - 0.5f); p.lineTo (a.getCentreX(), a.getBottom() - a.getHeight() * 0.24f);
+            p.addEllipse (a.getCentreX() - 0.9f, a.getY() + a.getHeight() * 0.22f, 1.8f, 1.8f);
+            break;
+        }
         case Icon::Spectrum:
         {
             // a few bars of a spectrum

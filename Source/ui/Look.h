@@ -5,20 +5,21 @@ namespace theme
 {
     // Black background; block colours by type; one teal accent.
     const juce::Colour bg       { 0xff000000 };
-    const juce::Colour panel    { 0xff0f0f10 };
-    const juce::Colour card     { 0xff161618 };
-    const juce::Colour raised   { 0xff1e1e21 };
-    const juce::Colour hover    { 0xff26262a };
-    const juce::Colour line     { 0xff2a2a2e };
-    const juce::Colour path     { 0xff3c3c42 };
+    // pitch black everywhere; panels are told apart by thin outlines, like the Quad Cortex
+    const juce::Colour panel    { 0xff000000 };
+    const juce::Colour card     { 0xff060607 };
+    const juce::Colour raised   { 0xff111113 };
+    const juce::Colour hover    { 0xff1c1c20 };
+    const juce::Colour line     { 0xff26262b };
+    const juce::Colour path     { 0xff3a3a40 };
     const juce::Colour text     { 0xffeceef1 };
     const juce::Colour muted    { 0xff9ea3ab };
     const juce::Colour faint    { 0xff6c7078 };
-    const juce::Colour accent   { 0xff2fb5a8 };
+    const juce::Colour accent   { 0xff00f0d0 };   // neon teal
     const juce::Colour shaping  { 0xff8c9098 };
-    const juce::Colour warn     { 0xffef4444 };
-    const juce::Colour good     { 0xff5dbb63 };
-    const juce::Colour amber    { 0xffeab308 };
+    const juce::Colour warn     { 0xffff2a3d };
+    const juce::Colour good     { 0xff2bff6a };
+    const juce::Colour amber    { 0xffffc400 };
 
     // fonts (Inter, bundled) scaled by the user's font-size setting
     juce::Font font (float size, int weight = 0);   // weight: 0 regular, 1 medium, 2 semibold

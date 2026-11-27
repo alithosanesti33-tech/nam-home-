@@ -10,6 +10,12 @@ class BlockEditor : public juce::Component
 {
 public:
     BlockEditor (NAMHomeProcessor& p, std::shared_ptr<Block> b);
+    ~BlockEditor() override;
+    // the info button: hover a control to read what it does (Helix Stadium style)
+    static bool& infoMode();
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseEnter (const juce::MouseEvent& e) override { mouseMove (e); }
+    void mouseExit (const juce::MouseEvent&) override;
     void resized() override;
     void paint (juce::Graphics&) override;
     virtual void sync();                       // ~20 Hz: follow MIDI and meter changes
@@ -36,6 +42,15 @@ protected:
         void paint (juce::Graphics&) override;
     };
     bool grouped = false;
+    juce::String visibleSig;
+    struct InfoStrip : public juce::Component
+    {
+        juce::String title, text;
+        juce::Colour colour;
+        void paint (juce::Graphics&) override;
+    } info;
+    void showInfoFor (int paramIndex);
+    juce::Rectangle<int> takeInfoArea (juce::Rectangle<int>& r);
     juce::Viewport viewport;
     GroupContent content;
     void layoutGrouped (juce::Rectangle<int> r);

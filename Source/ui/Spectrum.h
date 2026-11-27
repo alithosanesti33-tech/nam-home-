@@ -102,7 +102,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (juce::Colour (0xff111214));
+        g.setColour (juce::Colour (0xff000000));
         g.fillRoundedRectangle (r, 12.0f);
         g.setColour (juce::Colour (0xff2a2c31));
         g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
@@ -121,7 +121,7 @@ public:
         }
         auto toF = [this, a] (float x) { return freqFor (x, a); };
         auto toY = [this, a] (float db) { return yFor (db, a); };
-        const auto c = juce::Colour (0xff2fb5a8);
+        const auto c = juce::Colour (0xff00f0d0);
         auto fill = meter.makePath (a, toF, toY, false, true);
         g.setGradientFill (juce::ColourGradient (c.withAlpha (0.45f), 0, a.getY(), c.withAlpha (0.05f), 0, a.getBottom(), false));
         g.fillPath (fill);

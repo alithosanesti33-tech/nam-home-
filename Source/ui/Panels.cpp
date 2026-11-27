@@ -439,7 +439,7 @@ SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : pro
             auto* kn = eqKnobs.add (new ValueKnob (names[k], lo[k], hi[k], def[k], (k == 0 || k == 6) ? "Hz" : "dB",
                 [this, k] { return proc.engine.outEq[k].load(); },
                 [this, k] (float v) { proc.setOutputEq (k, v); outProfile.setSelectedId (99, dontSendNotification); },
-                Colour (0xff5dbb63)));
+                Colour (0xff2bff6a)));
             if (k == 0 || k == 6) kn->slider.setSkewFactorFromMidPoint (k == 0 ? 80.0 : 8000.0);
             outputPage.addAndMakeVisible (kn);
         }

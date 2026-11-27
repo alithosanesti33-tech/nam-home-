@@ -320,21 +320,21 @@ juce::Colour Block::colour (Type t)
 {
     switch (t)
     {
-        case Type::NamAmp:       return juce::Colour (0xff2fb5a8);
-        case Type::Cab:          return juce::Colour (0xff9b7be0);
+        case Type::NamAmp:       return juce::Colour (0xff00f0d0);
+        case Type::Cab:          return juce::Colour (0xffa855ff);
         case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor:
         case Type::Whammy: case Type::Octave: case Type::EnvFilter: case Type::Swell: case Type::Fuzz: case Type::ATDrive:
-                                 return juce::Colour (0xffe0a030);
+                                 return juce::Colour (0xffffa500);
         case Type::GraphicEQ: case Type::ParametricEQ:
-                                 return juce::Colour (0xff5dbb63);
+                                 return juce::Colour (0xff2bff6a);
         case Type::Gate: case Type::Utility:
-                                 return juce::Colour (0xff8a8f98);
-        case Type::PhatTrack:    return juce::Colour (0xffff7a59);
-        case Type::Sax:          return juce::Colour (0xffe8c547);
-        case Type::Looper:       return juce::Colour (0xffe5484d);
-        case Type::Drums:        return juce::Colour (0xff4f9fe0);
-        case Type::BackingTrack: return juce::Colour (0xff4fc3a1);
-        default:                 return juce::Colour (0xffe26ba8);
+                                 return juce::Colour (0xffa0a6b0);
+        case Type::PhatTrack:    return juce::Colour (0xffff5a36);
+        case Type::Sax:          return juce::Colour (0xffffd400);
+        case Type::Looper:       return juce::Colour (0xffff2d55);
+        case Type::Drums:        return juce::Colour (0xff2f8bff);
+        case Type::BackingTrack: return juce::Colour (0xff00e6a0);
+        default:                 return juce::Colour (0xffff2fa0);
     }
 }
 
@@ -409,26 +409,26 @@ juce::Colour Block::colourFor (Type t, int v)
         case Type::Drive:
         {
             // Green OD = Tube Screamer green, Transparent OD = Klon silver, Distortion = RAT black
-            static const juce::uint32 c[5] = { 0xff2e9e4f, 0xffc8ccd2, 0xffe0a030, 0xff2b2b30, 0xffb0532c };
+            static const juce::uint32 c[5] = { 0xff00e05a, 0xffd8e0ea, 0xffffb000, 0xff50505c, 0xffff5a1f };
             return juce::Colour (c[juce::jlimit (0, 4, v)]);
         }
         case Type::Fuzz:
         {
-            static const juce::uint32 c[3] = { 0xffe3e5e8, 0xffc62f2f, 0xffd9822b };   // Big Muff chrome, Fuzz Face red, germanium orange
+            static const juce::uint32 c[3] = { 0xfff0f3f7, 0xffff2a2a, 0xffff8c00 };   // Big Muff chrome, Fuzz Face red, germanium orange
             return juce::Colour (c[juce::jlimit (0, 2, v)]);
         }
-        case Type::Compressor: return v == 1 ? juce::Colour (0xff6f87b3) : colour (t);
-        case Type::ATDrive:    return juce::Colour (0xffd23a3a);
-        case Type::Whammy:     return juce::Colour (0xffd32f2f);
-        case Type::Octave:     return juce::Colour (0xff9fb2c8);
-        case Type::EnvFilter:  return juce::Colour (0xff3c7dd9);
-        case Type::Swell:      return juce::Colour (0xffd9d9d9);
-        case Type::Wah: case Type::Volume: return juce::Colour (0xff2b2b30);
-        case Type::Reverb:     return juce::Colour (0xffc56be2);
-        case Type::Freeze:     return juce::Colour (0xff8fd3ff);
-        case Type::TwelveString: return juce::Colour (0xffc9a56a);
-        case Type::Acoustic:   return juce::Colour (0xffd8a65b);
-        case Type::Granular:   return juce::Colour (0xff7d6bd9);
+        case Type::Compressor: return v == 1 ? juce::Colour (0xff4f8cff) : colour (t);
+        case Type::ATDrive:    return juce::Colour (0xffff2a3d);
+        case Type::Whammy:     return juce::Colour (0xffff1f3a);
+        case Type::Octave:     return juce::Colour (0xffa8c8ff);
+        case Type::EnvFilter:  return juce::Colour (0xff1f7bff);
+        case Type::Swell:      return juce::Colour (0xffe6e6e6);
+        case Type::Wah: case Type::Volume: return juce::Colour (0xff50505c);
+        case Type::Reverb:     return juce::Colour (0xffd04dff);
+        case Type::Freeze:     return juce::Colour (0xff4fd8ff);
+        case Type::TwelveString: return juce::Colour (0xffffc46b);
+        case Type::Acoustic:   return juce::Colour (0xffffb347);
+        case Type::Granular:   return juce::Colour (0xff8a5cff);
         default:               return colour (t);
     }
 }

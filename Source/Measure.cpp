@@ -92,8 +92,8 @@ juce::String gainStageName (int s)
 
 juce::Colour gainColour (float g)
 {
-    if (g < 0) return juce::Colour (0xff2fb5a8);
-    static const juce::Colour stops[5] = { juce::Colour (0xff3d8bfd), juce::Colour (0xff4cc46b), juce::Colour (0xffe6c84a), juce::Colour (0xfff08a3c), juce::Colour (0xffe5484d) };
+    if (g < 0) return juce::Colour (0xff00f0d0);
+    static const juce::Colour stops[5] = { juce::Colour (0xff2f7bff), juce::Colour (0xff2bff6a), juce::Colour (0xffffe600), juce::Colour (0xffff8a00), juce::Colour (0xffff2a2a) };
     const float x = juce::jlimit (0.0f, 1.0f, g) * 4.0f;
     const int i = juce::jmin (3, (int) x);
     return stops[i].interpolatedWith (stops[i + 1], x - (float) i);
@@ -101,7 +101,7 @@ juce::Colour gainColour (float g)
 
 juce::Colour irColour (float b)
 {
-    if (b < 0) return juce::Colour (0xff9b7be0);
-    return juce::Colour (0xff5b3fa8).interpolatedWith (juce::Colour (0xffcdbbff), juce::jlimit (0.0f, 1.0f, b));
+    if (b < 0) return juce::Colour (0xffa855ff);
+    return juce::Colour (0xff6a1bff).interpolatedWith (juce::Colour (0xffd9b8ff), juce::jlimit (0.0f, 1.0f, b));
 }
 }

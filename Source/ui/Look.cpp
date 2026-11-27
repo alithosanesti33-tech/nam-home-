@@ -86,7 +86,7 @@ void NamLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int h, 
 
     // knob body with a subtle top highlight
     auto body = r.reduced (thick * 2.6f);
-    g.setGradientFill (ColourGradient (Colour (0xff2c2c31), body.getCentreX(), body.getY(), Colour (0xff17171a), body.getCentreX(), body.getBottom(), false));
+    g.setGradientFill (ColourGradient (Colour (0xff222226), body.getCentreX(), body.getY(), Colour (0xff0a0a0c), body.getCentreX(), body.getBottom(), false));
     g.fillEllipse (body);
     g.setColour (Colour (0xff3a3a40));
     g.drawEllipse (body, 1.0f);

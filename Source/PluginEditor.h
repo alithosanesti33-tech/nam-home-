@@ -51,6 +51,7 @@ private:
     IconButton midi { IconButton::Icon::Midi, "MIDI learn: on/off switch for this block" };
     IconButton close { IconButton::Icon::Chevron, "Close the editor (Esc)" };
     juce::TextButton starts { "Starting points" };
+    IconButton info { IconButton::Icon::Info, "Info: point at a control to see what it does" };
     juce::String lastTitle;
 };
 

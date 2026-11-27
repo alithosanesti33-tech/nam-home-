@@ -1,4 +1,5 @@
 #include "BlockEditors.h"
+#include "../ParamHelp.h"
 #include "../PluginProcessor.h"
 
 using namespace juce;
@@ -8,6 +9,75 @@ BlockEditor::BlockEditor (NAMHomeProcessor& p, std::shared_ptr<Block> b) : block
 {
     lastParam = (int) block->params.size() - 1;
     rebuild();
+    info.colour = block->getColour();
+    info.setInterceptsMouseClicks (false, false);
+    addChildComponent (info);
+    addMouseListener (this, true);   // hovering any control updates the info strip
+    showInfoFor (-1);
+}
+
+BlockEditor::~BlockEditor() { removeMouseListener (this); }
+
+bool& BlockEditor::infoMode() { static bool on = false; return on; }
+
+juce::Rectangle<int> BlockEditor::takeInfoArea (juce::Rectangle<int>& r)
+{
+    info.setVisible (infoMode());
+    if (! infoMode()) return {};
+    auto a = r.removeFromBottom (48);
+    r.removeFromBottom (8);
+    info.setBounds (a);
+    info.toFront (false);
+    return a;
+}
+
+void BlockEditor::showInfoFor (int i)
+{
+    auto& b = *block;
+    if (i >= 0 && i < (int) b.params.size())
+    {
+        auto& prm = *b.params[(size_t) i];
+        const auto t = paramHelp (b, prm);
+        info.title = prm.name;
+        info.text = t.isNotEmpty() ? t : juce::String ("No description for this control yet.");
+    }
+    else
+    {
+        info.title = Block::typeName (b.getType());
+        const auto t = blockHelp (b);
+        info.text = t.isNotEmpty() ? t + "  Point at a control to see what it does."
+                                   : juce::String ("Point at a control to see what it does.");
+    }
+    info.repaint();
+}
+
+void BlockEditor::mouseMove (const MouseEvent& e)
+{
+    if (! infoMode()) return;
+    for (auto* c = e.originalComponent; c != nullptr && c != this; c = c->getParentComponent())
+        if (c->getProperties().contains ("index")) { showInfoFor ((int) c->getProperties()["index"]); return; }
+}
+
+void BlockEditor::mouseExit (const MouseEvent& e)
+{
+    if (infoMode() && ! getLocalBounds().contains (e.getEventRelativeTo (this).getPosition())) showInfoFor (-1);
+}
+
+void BlockEditor::InfoStrip::paint (Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (theme::card);
+    g.fillRoundedRectangle (r, 9.0f);
+    g.setColour (colour.withAlpha (0.55f));
+    g.drawRoundedRectangle (r.reduced (0.5f), 9.0f, 1.0f);
+    auto t = getLocalBounds().reduced (12, 6);
+    g.setColour (colour);
+    g.setFont (theme::font (12.5f, 2));
+    const int tw = jmin (220, (int) GlyphArrangement::getStringWidth (theme::font (12.5f, 2), title) + 14);
+    g.drawText (title, t.removeFromLeft (tw), Justification::centredLeft);
+    g.setColour (theme::text);
+    g.setFont (theme::font (12.5f));
+    g.drawFittedText (text, t, Justification::centredLeft, 2, 0.9f);
 }
 
 bool BlockEditor::skipParam (int i) const
@@ -40,6 +110,7 @@ void BlockEditor::rebuild()
         if (prm.id == "type" && prm.kind == Param::Kind::Choice)
         {
             typeBar = std::make_unique<ParamSegments> (proc, b, i, col);
+            typeBar->getProperties().set ("index", i);
             typeBar->onChange = changed;
             addAndMakeVisible (*typeBar);
         }
@@ -71,6 +142,7 @@ void BlockEditor::paint (Graphics&) {}
 void BlockEditor::resized()
 {
     auto r = getLocalBounds().reduced (18, 12);
+    takeInfoArea (r);
     auto& b = *block;
     auto visible = [&b] (Component* c)
     {
@@ -88,38 +160,38 @@ void BlockEditor::resized()
     r = layoutSpecial (r);
     if (grouped) { layoutGrouped (r); return; }
 
-    // right column: choices and switches
-    int nRight = 0;
-    for (auto* c : combos) if (visible (c)) ++nRight;
-    for (auto* s : switches) if (visible (s)) ++nRight;
-    if (nRight > 0)
+    // choices and switches go in columns on the right (more columns if there are lots of them)
+    Array<Component*> right;
+    for (auto* c : combos) { c->setVisible (visible (c)); if (c->isVisible()) right.add (c); }
+    for (auto* s : switches) { s->setVisible (visible (s)); if (s->isVisible()) right.add (s); }
+    if (! right.isEmpty())
     {
-        auto col = r.removeFromRight (230);
+        int total = 0;
+        for (auto* c : right) total += (dynamic_cast<ParamCombo*> (c) != nullptr ? 58 : 36);
+        const int nCols = jlimit (1, 3, (total + r.getHeight() - 1) / jmax (1, r.getHeight()));
+        auto area = r.removeFromRight (nCols * 230 + (nCols - 1) * 12);
         r.removeFromRight (16);
-        for (auto* c : combos)
+        auto col = area.removeFromLeft (230);
+        for (auto* c : right)
         {
-            c->setVisible (visible (c));
-            if (c->isVisible()) { c->setBounds (col.removeFromTop (54)); col.removeFromTop (4); }
+            const int h = dynamic_cast<ParamCombo*> (c) != nullptr ? 54 : 32;
+            if (col.getHeight() < h && area.getWidth() > 0) { area.removeFromLeft (12); col = area.removeFromLeft (230); }
+            c->setBounds (col.removeFromTop (h));
+            col.removeFromTop (4);
         }
-        for (auto* s : switches)
-        {
-            s->setVisible (visible (s));
-            if (s->isVisible()) { s->setBounds (col.removeFromTop (32)); col.removeFromTop (4); }
-        }
-    }
-    else
-    {
-        for (auto* c : combos) c->setVisible (false);
-        for (auto* s : switches) s->setVisible (false);
     }
 
-    // knobs flow, shrinking if there are many
+    // knobs fill the width: pick the biggest knob size that fits everything without scrolling
     Array<ParamKnob*> vk;
     for (auto* k : knobs) { k->setVisible (visible (k)); if (k->isVisible()) vk.add (k); }
-    int kw = 88, kh = 104;
-    auto fits = [&] (int w, int h) { const int perRow = jmax (1, r.getWidth() / w); const int rowsNeeded = (vk.size() + perRow - 1) / perRow; return rowsNeeded * h <= r.getHeight(); };
-    if (! fits (kw, kh)) { kw = 72; kh = 90; }
-    if (! fits (kw, kh)) { kw = 62; kh = 80; }
+    static const int sizes[][2] = { { 88, 104 }, { 80, 96 }, { 72, 90 }, { 66, 84 }, { 60, 78 }, { 54, 72 }, { 50, 66 } };
+    int kw = 50, kh = 66;
+    for (auto& sz : sizes)
+    {
+        const int perRow = jmax (1, r.getWidth() / sz[0]);
+        const int rowsNeeded = (vk.size() + perRow - 1) / perRow;
+        if (rowsNeeded * sz[1] <= r.getHeight()) { kw = sz[0]; kh = sz[1]; break; }
+    }
     const int perRow = jmax (1, r.getWidth() / kw);
     for (int i = 0; i < vk.size(); ++i)
         vk[i]->setBounds (r.getX() + (i % perRow) * kw, r.getY() + (i / perRow) * kh, kw - 6, kh - 4);
@@ -129,29 +201,70 @@ void BlockEditor::layoutGrouped (Rectangle<int> r)
 {
     viewport.setBounds (r);
     const int h = r.getHeight() - 12;
+    auto& b = *block;
+    auto shown = [&b] (Component* c)
+    {
+        auto& prm = *b.params[(size_t) (int) c->getProperties()["index"]];
+        const bool v = prm.visible == nullptr || prm.visible (b);
+        c->setVisible (v);
+        return v;
+    };
     StringArray order;
     for (auto& prm : block->params) if (prm->group.isNotEmpty()) order.addIfNotAlreadyThere (prm->group);
-    content.sections.clear();
-    int x = 0;
-    const int kw = 66, kh = 86;
+
+    struct Sec { String name; Array<Component*> ks, cs, ss; };
+    std::vector<Sec> secs;
     for (auto& g : order)
     {
-        Array<Component*> ks, cs, ss;
-        for (auto* k : knobs) if (block->params[(size_t) (int) k->getProperties()["index"]]->group == g) ks.add (k);
-        for (auto* c : combos) if (block->params[(size_t) (int) c->getProperties()["index"]]->group == g) cs.add (c);
-        for (auto* s : switches) if (block->params[(size_t) (int) s->getProperties()["index"]]->group == g) ss.add (s);
-        const int cols = ks.size() > 2 ? 2 : jmax (1, ks.size());
-        const int width = jmax (cols * kw, cs.isEmpty() && ss.isEmpty() ? 0 : 150) + 20;
-        auto sec = Rectangle<int> (x, 0, width, h);
-        content.sections.add ({ g, sec });
-        auto inner = sec.reduced (10, 0).withTrimmedTop (26).withTrimmedBottom (8);
-        for (auto* c : cs) { c->setBounds (inner.removeFromTop (50)); inner.removeFromTop (2); }
-        for (auto* s : ss) { s->setBounds (inner.removeFromTop (28).withWidth (jmax (150, inner.getWidth()))); inner.removeFromTop (2); }
-        for (int i = 0; i < ks.size(); ++i)
-            ks[i]->setBounds (inner.getX() + (i % cols) * kw, inner.getY() + (i / cols) * kh, kw - 4, kh - 4);
+        Sec sec; sec.name = g;
+        for (auto* k : knobs) if (block->params[(size_t) (int) k->getProperties()["index"]]->group == g && shown (k)) sec.ks.add (k);
+        for (auto* c : combos) if (block->params[(size_t) (int) c->getProperties()["index"]]->group == g && shown (c)) sec.cs.add (c);
+        for (auto* s : switches) if (block->params[(size_t) (int) s->getProperties()["index"]]->group == g && shown (s)) sec.ss.add (s);
+        if (! sec.ks.isEmpty() || ! sec.cs.isEmpty() || ! sec.ss.isEmpty()) secs.push_back (sec);
+    }
+
+    // each section gets as many knob columns as it needs to fit the height; the knob size is the
+    // biggest that lets every section fit across the panel, so nothing needs scrolling
+    static const int sizes[][2] = { { 80, 96 }, { 72, 90 }, { 66, 86 }, { 60, 78 }, { 54, 72 }, { 50, 66 } };
+    auto widthFor = [&] (const Sec& sec, int kw, int kh, bool& side)
+    {
+        const int listH = sec.cs.size() * 52 + sec.ss.size() * 30;
+        side = listH > (h - 34) / 2 && ! sec.ks.isEmpty();   // lots of menus: put them beside the knobs
+        const int knobH = (h - 34) - (side ? 0 : listH);
+        const int rows = jmax (1, knobH / kh);
+        const int cols = sec.ks.isEmpty() ? 0 : (sec.ks.size() + rows - 1) / rows;
+        const int listW = (sec.cs.isEmpty() && sec.ss.isEmpty()) ? 0 : 160;
+        return (side ? cols * kw + listW + 10 : jmax (cols * kw, listW)) + 20;
+    };
+    int kw = 50, kh = 66;
+    for (auto& sz : sizes)
+    {
+        int total = 0; bool side;
+        for (auto& sec : secs) total += widthFor (sec, sz[0], sz[1], side) + 8;
+        kw = sz[0]; kh = sz[1];
+        if (total - 8 <= r.getWidth()) break;
+    }
+
+    content.sections.clear();
+    int x = 0;
+    for (auto& sec : secs)
+    {
+        bool side = false;
+        const int width = widthFor (sec, kw, kh, side);
+        auto box = Rectangle<int> (x, 0, width, h);
+        content.sections.add ({ sec.name, box });
+        auto inner = box.reduced (10, 0).withTrimmedTop (26).withTrimmedBottom (8);
+        auto list = side ? inner.removeFromRight (160) : inner;
+        if (side) inner.removeFromRight (10);
+        for (auto* c : sec.cs) { c->setBounds (list.removeFromTop (50)); list.removeFromTop (2); }
+        for (auto* s : sec.ss) { s->setBounds (list.removeFromTop (28).withWidth (jmax (150, list.getWidth()))); list.removeFromTop (2); }
+        if (! side) inner = list;
+        const int rows = jmax (1, inner.getHeight() / kh);
+        for (int i = 0; i < sec.ks.size(); ++i)
+            sec.ks[i]->setBounds (inner.getX() + (i / rows) * kw, inner.getY() + (i % rows) * kh, kw - 4, kh - 4);
         x += width + 8;
     }
-    content.setSize (jmax (x, r.getWidth()), h);
+    content.setSize (jmax (x - 8, r.getWidth()), h);
 }
 
 void BlockEditor::GroupContent::paint (Graphics& g)
@@ -168,6 +281,10 @@ void BlockEditor::GroupContent::paint (Graphics& g)
 
 void BlockEditor::sync()
 {
+    // a control that shows or hides another (e.g. the sequencer's step count) re-lays the panel
+    juce::String sig;
+    for (auto& prm : block->params) sig << ((prm->visible == nullptr || prm->visible (*block)) ? '1' : '0');
+    if (sig != visibleSig) { const bool first = visibleSig.isEmpty(); visibleSig = sig; if (! first) resized(); }
     for (auto* k : knobs) k->sync();
     for (auto* c : combos) c->sync();
     for (auto* s : switches) s->sync();

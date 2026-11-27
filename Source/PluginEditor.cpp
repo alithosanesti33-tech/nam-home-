@@ -61,8 +61,18 @@ Drawer::Drawer (NAMHomeProcessor& p) : proc (p)
             if (onMessage) onMessage (list[(size_t) r - 1].name + ": " + list[(size_t) r - 1].note, false);
         });
     };
-    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close, &starts }) addChildComponent (c);
-    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close }) c->setVisible (true);
+    BlockEditor::infoMode() = proc.settings().getBoolValue ("infoMode", false);
+    info.lit = BlockEditor::infoMode();
+    info.onClick = [this]
+    {
+        auto& on = BlockEditor::infoMode();
+        on = ! on;
+        info.lit = on; info.repaint();
+        proc.settings().setValue ("infoMode", on);
+        if (editor != nullptr) editor->resized();
+    };
+    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close, &starts, &info }) addChildComponent (c);
+    for (auto* c : std::initializer_list<Component*> { &power, &midi, &close, &info }) c->setVisible (true);
 }
 
 void Drawer::show (std::shared_ptr<Block> b)
@@ -114,6 +124,8 @@ void Drawer::resized()
     midi.setBounds (hdr.removeFromRight (32));
     hdr.removeFromRight (6);
     power.setBounds (hdr.removeFromRight (32));
+    hdr.removeFromRight (6);
+    info.setBounds (hdr.removeFromRight (32));
     hdr.removeFromRight (10);
     starts.setBounds (hdr.removeFromRight (140));
     if (editor != nullptr) editor->setBounds (getLocalBounds().withTrimmedTop (56).reduced (2, 4));
