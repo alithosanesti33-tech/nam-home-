@@ -43,8 +43,8 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     // set-and-forget: the mic is whichever input your guitar isn't on, and the gate sets its own
     // level from your room
     addChoice ("mic", "Mic input", { "Auto (the other input)", "Input 1", "Input 2" }, 0);
-    addFloat ("sens", "Mic level", -12, 36, 12, "dB", -1, 0.5f);
-    addFloat ("gate", "Gate", 3, 24, 9, "dB", -1, 0.5f);
+    addFloat ("sens2", "Mic level", -12, 40, 20, "dB", -1, 0.5f);   // the SD-1 is a quiet dynamic mic
+    addFloat ("gate2", "Gate", 2, 24, 6, "dB", -1, 0.5f);
     addToggle ("aec4", "Echo cancel", true);
     currentGroup = "Talk box";
     addFloat ("words", "Clarity", 0, 100, 85, "%", -1, 1);          // how sharp the mouth's resonances are
@@ -64,11 +64,12 @@ juce::String TalkBoxBlock::getSubtitle() const
     {
         case 2:  return "Needs a mic on input " + juce::String (micIn);
         case 3:  return "Mic input is your guitar input";
-        case 1:  return "Hearing you";
+        case 1:  return "Hearing you (breath " + juce::String ((int) std::round (micLevelDb.load())) + " dB)";
         case 4:  return "Learning your speakers... keep playing";
         default: break;
     }
-    return "Whisper to talk";
+    const float db = micLevelDb.load();
+    return db < -99.0f ? "Whisper to talk" : "Whisper to talk (breath " + juce::String ((int) std::round (db)) + " dB)";
 }
 
 void TalkBoxBlock::prepare (double sr, int)
@@ -135,7 +136,7 @@ void TalkBoxBlock::reset()
     std::fill (std::begin (lat), std::end (lat), 0.0f);
     gOld = gNew = gClosed; interp = 0;
     artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
-    carHold = outHold = 0; dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
+    carHold = outHold = 0; deEm = 0; dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
     decimCount = hopCount = delayCount = 0;
 }
 
@@ -198,7 +199,7 @@ void TalkBoxBlock::analyse (float mic, float ref)
     }
 
     // the mouth: your whisper (echo-cancelled) into the analysis frame
-    const float pe = e - 0.9f * preEm;   // pre-emphasis, so the higher resonances are read as well as the low ones
+    const float pe = e - 0.4f * preEm;   // a light pre-emphasis (undone on the way out, so the words aren't shrill)
     preEm = e;
     frame[framePos] = pe;
     framePos = (framePos + 1) % frameLen;
@@ -224,7 +225,7 @@ void TalkBoxBlock::newFrame()
     const float wF = std::max (breathDb, -100.0f);
     if (aec && ! aecLearned) floorDb += 0.2f * (wF - floorDb);
     else if (open < 0.5f)    floorDb += (wF < floorDb ? 0.04f : 0.0016f) * (wF - floorDb);
-    const float thr = std::max (-72.0f, floorDb + p (tGate));   // never below a real room's quietest
+    const float thr = std::max (-90.0f, floorDb + p (tGate));   // the SD-1 is quiet: a soft whisper still opens it
     if (aec && ! aecLearned) { open = 0.0f; status = 4; }
     else
     {
@@ -361,7 +362,10 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         {
             decimCount = 0;
             analyse (m, ref);
-            outHold = mouth (car) * (closedLv + (1.0f - closedLv) * openSm);
+            float mo = mouth (car);
+            deEm = mo + 0.4f * deEm;             // undo the analysis pre-emphasis: words sit in the mids
+            mo = deEm * 0.6f;
+            outHold = mo * (closedLv + (1.0f - closedLv) * openSm);
             up = outHold * (float) decim;   // back up to the full rate (zero-stuffed, then smoothed)
         }
         float y = upLP[1].process (upLP[0].process (up));
