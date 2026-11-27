@@ -3,7 +3,7 @@
 // A real talk box plays the amp into your mouth through a tube; your mouth's shape filters it and a
 // mic picks that up. Here your mic hears you whisper, and the block reads your mouth's resonances
 // the way speech analysis does (linear prediction: about 18 resonance stages, a new reading every
-// 4 ms from the last 16 ms of your whisper). The Heil-voiced guitar is then run through that same
+// 4 ms from the last 32 ms of your whisper). The Heil-voiced guitar is then run through that same
 // mouth filter, so the guitar says the words, consonants and all.
 //
 // Your mic is only listened to, never played, so it can't feed back. An echo canceller takes your

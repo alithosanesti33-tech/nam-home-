@@ -669,7 +669,7 @@ private:
     float open = 0, openSm = 0, holdLeft = 0;
 
     // mouth reading (linear prediction)
-    static constexpr int frameLen = 256, hop = 64;   // at ~16 kHz: 16 ms window, every 4 ms
+    static constexpr int frameLen = 512, hop = 64;   // at ~16 kHz: 32 ms window, every 4 ms (tuned from a test clip: steadier, follows vowels better)
     float frame[frameLen] {}; int framePos = 0;
     float preEm = 0;
     int order = 18;
