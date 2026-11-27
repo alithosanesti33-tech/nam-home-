@@ -676,6 +676,8 @@ private:
     ndsp::Biquad hp, lp1, lp2, presence, tube, proximity;
     ndsp::DelayLine tubeLine;
     float carHold = 0, outHold = 0, deEm = 0;
+    ndsp::Biquad consHP, consHP2;
+    float consSample = 0, consEnv = 0, consTarget = 0, consHissRef = 1.0f;
     float dryE = 0, wetE = 0, levelComp = 1.0f, limEnv = 0;
     std::atomic<float> micLevelDb { -100.0f };
     std::atomic<int> status { 0 };   // 0 listening, 1 hearing you, 2 no second input, 3 same as guitar, 4 learning

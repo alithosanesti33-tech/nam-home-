@@ -14,7 +14,7 @@ using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix };
+    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix, tCons };
 
     // Levinson-Durbin: autocorrelation r[0..p] -> reflection coefficients k[0..p-1]
     void levinson (const double* r, int p, float* k)
@@ -55,6 +55,11 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     addFloat ("artic2", "Articulation", 0, 100, 60, "%", -1, 1);
     addFloat ("level", "Level", -24, 12, 0, "dB", -1, 0.1f);
     addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1);
+    // consonants: like the mic on a real talk box, the little bursts of your actual "t", "k", "p",
+    // "s", "ch" are let through (only those instants, only what isn't your speakers), so the words
+    // are crisp and understandable, not just vowels
+    currentGroup = "Talk box";
+    addFloat ("cons", "Consonants", 0, 100, 50, "%", -1, 1);
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
@@ -94,6 +99,8 @@ void TalkBoxBlock::prepare (double sr, int)
     refBHP = breathHP; refBHP2 = breathHP2; refBLP = breathLP;
     breathC = 1.0f - std::exp (-1.0f / (0.01f * aRate));
     artBP.set (Biquad::Type::BandPass, aRate, 1200.0f, 0.35f);
+    consHP.set (Biquad::Type::HighPass, aRate, 1500.0f, 0.707f);
+    consHP2.set (Biquad::Type::HighPass, aRate, 1500.0f, 0.707f);
     artFC = 1.0f - std::exp (-1.0f / (0.003f * aRate));
     artSC = 1.0f - std::exp (-1.0f / (0.06f * aRate));
 
@@ -136,7 +143,7 @@ void TalkBoxBlock::reset()
     std::fill (std::begin (lat), std::end (lat), 0.0f);
     gOld = gNew = gClosed; interp = 0;
     artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
-    carHold = outHold = 0; deEm = 0; dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
+    carHold = outHold = 0; deEm = 0; consSample = consEnv = consTarget = 0; consHissRef = 1.0f; consHP.reset(); consHP2.reset(); dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
     decimCount = hopCount = delayCount = 0;
 }
 
@@ -198,6 +205,10 @@ void TalkBoxBlock::analyse (float mic, float ref)
         artSlow += artSC * (vb * vb - artSlow);
     }
 
+    // the consonant sound itself: your echo-cancelled whisper, above ~1.5 kHz
+    consSample = consHP2.process (consHP.process (e));
+    consEnv += (consTarget > consEnv ? 0.25f : 0.008f) * (consTarget - consEnv);   // ~0.5 ms on, ~8 ms off
+
     // the mouth: your whisper (echo-cancelled) into the analysis frame
     const float pe = e - 0.4f * preEm;   // a light pre-emphasis (undone on the way out, so the words aren't shrill)
     preEm = e;
@@ -246,6 +257,16 @@ void TalkBoxBlock::newFrame()
     const bool sounding = open > 0.5f && af > 0.2f * as;
     const float r = open > 0.5f ? clamp (std::sqrt (af / as), 0.1f, 1.3f) : 1.0f;
     artGain = 1.0f + p (tArtic) * 0.01f * (r - 1.0f);
+
+    // consonant detector: a sudden burst (a "t", "k", "p" release) or breath that is hissy rather than
+    // voweled (an "s", "sh", "f", "ch": lots of breath against the vowel band)
+    {
+        const float burst = af / as;                                   // >1: louder than the last ~60 ms
+        const float hiss = breathYou / (af + 1.0e-12f);                // breath against the vowel band
+        const bool cons = open > 0.5f && (burst > 2.2f || hiss > consHissRef * 3.0f);
+        if (open > 0.5f && ! cons) consHissRef += 0.02f * (hiss - consHissRef);   // your normal vowel balance
+        consTarget = cons ? 1.0f : 0.0f;
+    }
 
     // where the filter is now becomes the start of the next glide
     for (int i = 0; i < order; ++i) kOld[i] = kNew[i];
@@ -328,6 +349,7 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float drive = p (tDrive) * 0.01f, tubeAmt = p (tTube) * 0.01f;
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
     const float closedLv = 0.3f + 0.7f * p (tClosed) * 0.01f;
+    const float consAmt = p (tCons) * 0.01f;
     const float tone = std::min (p (tTone), 0.42f * aRate);
     lp1.set (Biquad::Type::LowPass, sampleRate, tone, 0.65f);
     lp2.set (Biquad::Type::LowPass, sampleRate, std::min (1.25f * tone, 0.45f * sampleRate), 0.7f);
@@ -366,6 +388,13 @@ void TalkBoxBlock::process (float* L, float* R, int n)
             deEm = mo + 0.4f * deEm;             // undo the analysis pre-emphasis: words sit in the mids
             mo = deEm * 0.6f;
             outHold = mo * (closedLv + (1.0f - closedLv) * openSm);
+            // consonants: your actual consonant burst, matched to the guitar's level (never more
+            // than a set ceiling, so it can't run away through the speakers)
+            if (consAmt > 0.001f && consEnv > 0.001f)
+            {
+                const float sc = std::min (40.0f, std::sqrt (dryE + 1.0e-12f) / std::sqrt (artSlow + 1.0e-12f));
+                outHold += consAmt * 0.6f * consEnv * consSample * sc / std::max (0.2f, levelComp);
+            }
             up = outHold * (float) decim;   // back up to the full rate (zero-stuffed, then smoothed)
         }
         float y = upLP[1].process (upLP[0].process (up));
