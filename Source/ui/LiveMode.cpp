@@ -52,6 +52,34 @@ void GigCheckPanel::paint (Graphics& g)
 }
 
 //==============================================================================
+// which control a strip button stands for, so it can be MIDI-learned the usual way (per preset)
+static bool learnTarget (NAMHomeProcessor& proc, const String& a, int& blockId, int& param)
+{
+    auto first = [&proc] (const String& tn) -> std::shared_ptr<Block>
+    {
+        for (int r = 0; r < Engine::rows; ++r)
+            for (int c = 0; c < Engine::cols; ++c)
+                if (auto b = proc.engine.get (r, c)) if (b->getTypeName() == tn) return b;
+        return nullptr;
+    };
+    auto paramOf = [&] (const String& tn, const String& id)
+    {
+        if (auto b = first (tn))
+            for (size_t i = 0; i < b->params.size(); ++i)
+                if (b->params[i]->id == id) { blockId = b->id; param = (int) i; return true; }
+        return false;
+    };
+    if (a == "tap") { blockId = -1; param = 0; return true; }
+    if (a == "preset-") { blockId = Engine::setlistMidiId; param = 0; return true; }
+    if (a == "preset+") { blockId = Engine::setlistMidiId; param = 1; return true; }
+    if (a == "looper") { if (auto b = first ("Looper")) { blockId = b->id; param = 0; return true; } return false; }
+    if (a == "freeze") return paramOf ("Freeze", "hold");
+    if (a == "granular") return paramOf ("Granular", "hold");
+    if (a == "talk") return paramOf ("Talk box", "talk");
+    if (a.startsWith ("type:")) if (auto b = first (a.fromFirstOccurrenceOf (":", false, false))) { blockId = b->id; param = -1; return true; }
+    return false;
+}
+
 LiveView::LiveView (NAMHomeProcessor& p, AudioDeviceManager* dm) : proc (p), deviceManager (dm), tuner (p)
 {
     setWantsKeyboardFocus (true);
@@ -206,7 +234,9 @@ void LiveView::paint (Graphics& g)
     for (int i = 0; i < NAMHomeProcessor::stripSlots; ++i)
     {
         const auto a = acts[i];
-        bigButton (g, stripR[i], NAMHomeProcessor::actionLabel (a), a == "none" ? String ("right-click to set") : String(),
+        int bid = 0, prm = 0;
+        const String midi = learnTarget (proc, a, bid, prm) ? proc.engine.describeMapping (bid, prm) : String();
+        bigButton (g, stripR[i], NAMHomeProcessor::actionLabel (a), a == "none" ? String ("right-click to set") : midi,
                    proc.actionLit (a), a == "panic" ? theme::warn : theme::amber, pressed == 200 + i, 22.0f * hs);
     }
     {
@@ -247,7 +277,24 @@ void LiveView::mouseDown (const MouseEvent& e)
         pressed = 300; proc.triggerPanic(); repaint(); return;
     }
     for (int i = 0; i < 8; ++i)
-        if (sceneR[i].contains (pt)) { pressed = i; proc.engine.selectScene (i); repaint(); return; }
+        if (sceneR[i].contains (pt))
+        {
+            if (e.mods.isPopupMenu())
+            {
+                const auto now = proc.engine.describeMapping (Engine::sceneMidiId, i);
+                PopupMenu m;
+                m.addItem (1, now.isEmpty() ? "MIDI learn a footswitch for this scene" : "MIDI learn again (now " + now + ")");
+                m.addItem (2, "Clear MIDI", now.isNotEmpty());
+                m.showMenuAsync (PopupMenu::Options(), [this, i] (int r)
+                {
+                    if (r == 1) { proc.engine.armLearn (Engine::sceneMidiId, i); if (onMessage) onMessage ("Press the footswitch for this scene now...", false); }
+                    if (r == 2) { proc.engine.clearMappingsFor (Engine::sceneMidiId, i); proc.dirty = true; }
+                    repaint();
+                });
+                return;
+            }
+            pressed = i; proc.engine.selectScene (i); repaint(); return;
+        }
     if (prevR.contains (pt)) { pressed = 101; proc.stepPresetAny (-1); repaint(); return; }
     if (nextR.contains (pt)) { pressed = 102; proc.stepPresetAny (1); repaint(); return; }
     if (tapR.contains (pt)) { pressed = 103; proc.engine.tapTempo(); repaint(); return; }
@@ -293,9 +340,22 @@ void LiveView::stripMenu (int slot)
         ++id;
     }
     m.addSubMenu ("Turn a block on/off", blocks);
+    int bid = 0, prm = 0;
+    const bool canLearn = learnTarget (proc, cur, bid, prm);
+    const auto now = canLearn ? proc.engine.describeMapping (bid, prm) : String();
+    m.addSeparator();
+    m.addItem (900, ! canLearn ? (cur == "tuner" || cur.startsWith ("scene") ? String ("MIDI learn (not for this button: use the tuner / scene switches)") : String ("MIDI learn (add that block to the rig first)"))
+                               : now.isEmpty() ? String ("MIDI learn") : "MIDI learn again (now " + now + ")", canLearn);
+    m.addItem (901, "Clear MIDI", now.isNotEmpty());
     m.showMenuAsync (PopupMenu::Options(), [this, slot, all] (int r)
     {
         if (r >= 1 && r <= all.size()) { proc.setStripAction (slot, all[r - 1]); repaint(); }
+        int bid = 0, prm = 0;
+        if ((r == 900 || r == 901) && learnTarget (proc, proc.stripActions()[slot], bid, prm))
+        {
+            if (r == 900) { proc.engine.armLearn (bid, prm); if (onMessage) onMessage ("Press the footswitch or move the control on your MIDI device now...", false); }
+            else { proc.engine.clearMappingsFor (bid, prm); proc.dirty = true; }
+        }
     });
 }
 

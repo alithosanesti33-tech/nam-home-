@@ -348,7 +348,7 @@ void NAMHomeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 void NAMHomeProcessor::timerCallback()
 {
     engine.pollMessageThread();
-    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepSetlist (st);
+    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepPresetAny (st);   // no setlist: presets A-Z
     if (engine.panicLearned.exchange (false))
     {
         appSettings->setValue ("panicMidiKind", engine.panicKind.load());
