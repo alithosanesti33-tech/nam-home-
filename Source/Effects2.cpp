@@ -1013,7 +1013,8 @@ namespace
         (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9)  // major pentatonic
     };
     enum FzP { fHold, fMode, fSource, fPitch, fQuant, fVolume, fFadeIn, fFadeOut, fTone, fDry, fSet, fRoot, fNote0, fLevel0 = fNote0 + 12,
-               fShimmer = fLevel0 + 12, fMod, fWidth, fSeqOn, fSeqSteps, fSeqRate, fSeqGlide, fSeqRun, fStepPitch0, fStepLevel0 = fStepPitch0 + 16 };
+               fShimmer = fLevel0 + 12, fMod, fWidth, fSeqOn, fSeqSteps, fSeqRate, fSeqGlide, fSeqRun, fStepPitch0, fStepLevel0 = fStepPitch0 + 16,
+               fDiffusion = fStepLevel0 + 16, fSpace, fDecay, fSpaceLive };
 }
 
 FreezeBlock::FreezeBlock() : Block (Type::Freeze)
@@ -1059,6 +1060,15 @@ FreezeBlock::FreezeBlock() : Block (Type::Freeze)
             return stepIdx < 0 || stepIdx < b.params[(size_t) fSeqSteps]->getInt() + 1;   // only the steps in use
         };
     }
+    // an ambient pad (BigSky / Night Sky style) in every mode: the held sound is smeared into a soft,
+    // moving cloud and played into a big reverb space, instead of each note held as a steady tone
+    currentGroup = "Freeze";
+    // Rabea Massaad style: the frozen chord keeps playing inside a big reverb you also play into,
+    // and the chord stays clear (Diffusion only softens it, up to about a semitone)
+    addFloat ("diffusion", "Diffusion", 0, 100, 40, "%", -1, 1);
+    addFloat ("space", "Space", 0, 100, 60, "%", -1, 1);
+    addFloat ("decay", "Decay", 2, 20, 8, "s", 8, 0.1f);
+    addFloat ("spacelive", "Space on playing", 0, 100, 0, "%", -1, 1);
     currentGroup = {};
 }
 
@@ -1075,6 +1085,12 @@ void FreezeBlock::prepare (double sr, int)
     noteWeight.assign ((size_t) fftSize / 2 + 1, 0.0f);
     work.assign ((size_t) fftSize * 2, 0.0f);
     for (int c = 0; c < 2; ++c) { outAcc[c].assign ((size_t) fftSize, 0.0f); phase[c].assign ((size_t) fftSize / 2 + 1, 0.0f); }
+    for (int c = 0; c < 2; ++c) { drift[c].assign ((size_t) fftSize / 2 + 1, 1.0f); driftTarget[c].assign ((size_t) fftSize / 2 + 1, 1.0f); }
+    blurred.assign ((size_t) fftSize / 2 + 1, 0.0f);
+    // the space: a 8-line feedback delay network with slowly moving lengths (lush, not metallic)
+    static const float baseMs[8] = { 43.7f, 53.1f, 61.9f, 71.3f, 83.9f, 97.1f, 109.3f, 127.7f };
+    for (int k = 0; k < 8; ++k) { spLen[k] = baseMs[k] * 0.001f * (float) sr; spLine[k].setMaxSamples ((int) (spLen[k] * 1.1f) + 64); spDamp[k] = 0; spPh[k] = 0.13f * (float) k; }
+    for (int k = 0; k < 4; ++k) { static const float apMs[4] = { 4.7f, 6.1f, 8.3f, 11.9f }; spApLen[k] = (int) (apMs[k] * 0.001f * (float) sr); spAp[k].setMaxSamples (spApLen[k] + 8); }
     reset();
 }
 
@@ -1089,6 +1105,9 @@ void FreezeBlock::reset()
     seqSemi = seqSemiTarget = 0; seqGain = seqGainTarget = 1;
     modPh = 0;
     level = 0;
+    for (auto& l : spLine) l.clear();
+    for (auto& a : spAp) a.clear();
+    for (auto& d : spDamp) d = 0;
     lastNoteSet = -1;
 }
 
@@ -1156,6 +1175,33 @@ void FreezeBlock::synthFrame()
         noteWeight[(size_t) k] = w;
     }
 
+    // ambient pad: the held spectrum is blurred across frequency (Diffusion: up to ~1/2 octave), so
+    // single notes and overtones spread into a soft band instead of ringing like organ pipes
+    const bool ambient = true;
+    const float diff = p (fDiffusion) * 0.01f;
+    if (ambient)
+    {
+        const float* m0 = drone ? envSmooth.data() : frozen.data();
+        for (int k = 1; k < half; ++k)
+        {
+            const int w = std::max (1, (int) ((float) k * (0.004f + 0.056f * diff)));   // at most ~1 semitone each side
+            float acc = 0, wsum = 0;
+            for (int j = std::max (1, k - w); j <= std::min (half - 1, k + w); j += std::max (1, w / 6))
+            {
+                const float x = (float) (j - k) / (float) w, wt = 1.0f - x * x;
+                acc += m0[j] * wt; wsum += wt;
+            }
+            blurred[(size_t) k] = (1.0f - diff) * m0[k] + diff * acc / std::max (1.0e-6f, wsum);
+        }
+        // slow, independent swells in every part of the cloud (left and right differ): it breathes
+        for (int c = 0; c < 2; ++c)
+            for (int k = 1; k < half; ++k)
+            {
+                if (rng.nextFloat() < 0.02f) driftTarget[c][(size_t) k] = 0.45f + 1.1f * rng.nextFloat();
+                drift[c][(size_t) k] += 0.03f * (driftTarget[c][(size_t) k] - drift[c][(size_t) k]);
+            }
+    }
+
     for (int c = 0; c < 2; ++c)
     {
         std::fill (work.begin(), work.end(), 0.0f);
@@ -1165,7 +1211,7 @@ void FreezeBlock::synthFrame()
             const int s0 = (int) src;
             if (s0 < 1 || s0 >= half - 1) continue;
             const float fr = src - (float) s0;
-            const float* m = drone ? envSmooth.data() : frozen.data();
+            const float* m = ambient ? blurred.data() : (drone ? envSmooth.data() : frozen.data());
             float a = m[s0] + (m[s0 + 1] - m[s0]) * fr;
             a *= noteWeight[(size_t) s0] + (noteWeight[(size_t) s0 + 1] - noteWeight[(size_t) s0]) * fr;
             if (shimmer > 0.001f)
@@ -1187,8 +1233,19 @@ void FreezeBlock::synthFrame()
             // each bin turns at its own frequency plus a little random drift, so the hold shimmers
             // instead of buzzing; left and right drift differently for width
             auto& ph = phase[c][(size_t) k];
-            ph += twoPi * (float) k * (float) hop / (float) fftSize + (rng.nextFloat() - 0.5f) * (1.1f + 0.6f * mod);
-            ph = std::remainder (ph, twoPi);
+            if (ambient)
+            {
+                // a new random phase every frame (with the big window and 4x overlap this is a smooth,
+                // endless wash rather than a held chord), plus the slow swells
+                a *= drift[c][(size_t) k];
+                const float rnd = rng.nextFloat() * twoPi;
+                ph = rnd;
+            }
+            else
+            {
+                ph += twoPi * (float) k * (float) hop / (float) fftSize + (rng.nextFloat() - 0.5f) * (1.1f + 0.6f * mod);
+                ph = std::remainder (ph, twoPi);
+            }
             work[(size_t) (2 * k)] = a * std::cos (ph);
             work[(size_t) (2 * k + 1)] = a * std::sin (ph);
         }
@@ -1223,6 +1280,14 @@ void FreezeBlock::process (float* L, float* R, int n)
     const float width = p (fWidth) * 0.01f;
     const float glideMs = p (fSeqGlide);
     const float glideCoef = glideMs < 1.0f ? 1.0f : 1.0f - std::exp (-1.0f / (glideMs * 0.001f * sampleRate * 0.35f));
+    const bool ambient = true;
+    const float space = p (fSpace) * 0.01f;
+    const float spaceLive = p (fSpaceLive) * 0.01f;
+    {
+        const float decay = p (fDecay);
+        for (int k = 0; k < 8; ++k) spG[k] = std::pow (10.0f, -3.0f * spLen[k] / (decay * sampleRate));
+        spDampC = 1.0f - std::exp (-twoPi * 5500.0f / sampleRate);
+    }
 
     for (int i = 0; i < n; ++i)
     {
@@ -1248,10 +1313,50 @@ void FreezeBlock::process (float* L, float* R, int n)
             wa = seqShift[0].process (wa, r) * seqGain;
             wb = seqShift[1].process (wb, r) * seqGain;
         }
+        const float liveIn = 0.5f * (L[i] + R[i]) * spaceLive;
+        if (ambient && (space > 0.001f || spaceLive > 0.001f))
+        {
+            // into the space: allpass diffusion, then the 8-line network (Hadamard-style mixing,
+            // damping in the loop, slowly wandering lengths so it never rings metallic). The frozen
+            // pad goes in, and so does your live playing (Space on playing), so you solo in the same room
+            float x = 0.5f * (wa + wb) * level * level * vol * space + liveIn;
+            for (int k = 0; k < 4; ++k)
+            {
+                const float d = spAp[k].readInt (spApLen[k]);
+                const float v = x + 0.62f * d;
+                spAp[k].push (v);
+                x = d - 0.62f * v;
+            }
+            float o[8];
+            for (int k = 0; k < 8; ++k)
+            {
+                spPh[k] += (0.07f + 0.013f * (float) k) / sampleRate; if (spPh[k] > 1.0f) spPh[k] -= 1.0f;
+                const float dl = spLen[k] * (1.0f + 0.004f * std::sin (twoPi * spPh[k]));
+                o[k] = spLine[k].read (dl);
+            }
+            // 8x8 Hadamard (normalised)
+            float h[8];
+            for (int k = 0; k < 8; ++k) h[k] = o[k];
+            for (int len = 1; len < 8; len <<= 1)
+                for (int a0 = 0; a0 < 8; a0 += 2 * len)
+                    for (int j = a0; j < a0 + len; ++j) { const float u = h[j], v2 = h[j + len]; h[j] = u + v2; h[j + len] = u - v2; }
+            for (int k = 0; k < 8; ++k)
+            {
+                float fbk = h[k] * 0.35355339f * spG[k];
+                spDamp[k] += spDampC * (fbk - spDamp[k]);   // darker as it rings
+                spLine[k].push (spDamp[k] + x * 0.35f);
+            }
+            spOutL = 0.5f * (o[0] + o[2] + o[4] + o[6]) * 1.4f;
+            spOutR = 0.5f * (o[1] + o[3] + o[5] + o[7]) * 1.4f;
+        }
+        else spOutL = spOutR = 0.0f;
+        const float drySh = 1.0f - 0.6f * space;   // the pad itself, partly replaced by its space
+        wa *= drySh; wb *= drySh;
         const float mid = 0.5f * (wa + wb), side = 0.5f * (wa - wb) * width;
         const float g = level * level * vol;   // squared: fades sound even
-        L[i] = L[i] * dry + (mid + side) * g;
-        R[i] = R[i] * dry + (mid - side) * g;
+        // the space keeps ringing out after you let go (its tail), and carries your playing too
+        L[i] = L[i] * dry + (mid + side) * g + spOutL * (space > 0.001f || spaceLive > 0.001f ? 1.0f : 0.0f);
+        R[i] = R[i] * dry + (mid - side) * g + spOutR * (space > 0.001f || spaceLive > 0.001f ? 1.0f : 0.0f);
     }
     if (! holding && level <= 0.0f) haveFrozen = false;
 }
@@ -1266,10 +1371,18 @@ std::vector<Block::StartingPoint> FreezeBlock::startingPoints() const
           "A slow, soft swell with a quiet octave shimmer that fades out gently. " + juce::String (holdTip),
           { { "mode", 0 }, { "source", 0 }, { "pitch", 0 }, { "volume", 85 }, { "fadeIn", 3500 }, { "fadeOut", 8000 },
             { "tone", 4500 }, { "dry", 100 }, { "set", 1 }, { "shimmer", 32 }, { "mod", 18 }, { "width", 125 }, { "seqOn", 0 } } },
-        { "Classic freeze",
-          "Holds exactly what you played, quickly. " + juce::String (holdTip),
-          { { "mode", 0 }, { "source", 0 }, { "pitch", 0 }, { "volume", 100 }, { "fadeIn", 120 }, { "fadeOut", 1500 },
+        { "Quick freeze",
+          "Holds what you played, quickly, with a tighter wash and a smaller space. " + juce::String (holdTip),
+          { { "diffusion", 30 }, { "space", 30 }, { "decay", 5 }, { "mode", 0 }, { "source", 0 }, { "pitch", 0 }, { "volume", 100 }, { "fadeIn", 120 }, { "fadeOut", 1500 },
             { "tone", 9000 }, { "set", 1 }, { "shimmer", 0 }, { "mod", 0 }, { "width", 100 }, { "seqOn", 0 } } },
+        { "BigSky-style ambient pad",
+          "A soft, endless wash that keeps breathing, in a big space. " + juce::String (holdTip),
+          { { "diffusion", 80 }, { "space", 65 }, { "decay", 11 }, { "mode", 0 }, { "source", 0 }, { "volume", 90 },
+            { "fadeIn", 1500 }, { "fadeOut", 6000 }, { "tone", 6500 }, { "set", 1 }, { "shimmer", 15 }, { "mod", 20 }, { "width", 130 }, { "seqOn", 0 } } },
+        { "Rabea-style freeze pad",
+          "Freeze a chord and it keeps ringing in a big reverb that your soloing goes into too. Use Pitch or the note buttons to move the chord. " + juce::String (holdTip),
+          { { "diffusion", 35 }, { "space", 70 }, { "decay", 10 }, { "spacelive", 35 }, { "mode", 0 }, { "source", 0 }, { "volume", 85 },
+            { "fadeIn", 900 }, { "fadeOut", 5000 }, { "tone", 7000 }, { "set", 1 }, { "shimmer", 0 }, { "mod", 15 }, { "width", 140 }, { "seqOn", 0 } } },
         { "Building infinite pad",
           "Keeps adding what you play while held, like a Night Sky style infinite pad.",
           { { "mode", 1 }, { "source", 0 }, { "volume", 80 }, { "fadeIn", 1500 }, { "fadeOut", 6000 }, { "tone", 6000 },

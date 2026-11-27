@@ -563,6 +563,11 @@ private:
     bool seqWasRunning = false;
     float seqSemi = 0, seqGain = 1, seqGainTarget = 1, seqSemiTarget = 0;
     void advanceSequencer (int n);
+    // ambient pad
+    std::vector<float> blurred, drift[2], driftTarget[2];
+    ndsp::DelayLine spLine[8], spAp[4];
+    float spLen[8] {}, spG[8] {}, spDamp[8] {}, spPh[8] {}, spDampC = 0.5f, spOutL = 0, spOutR = 0;
+    int spApLen[4] {};
 };
 
 // Tremolo: optical-style sine, triangle, choppy square, or harmonic (Brownface-style band split).
