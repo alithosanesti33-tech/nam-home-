@@ -97,6 +97,12 @@ public:
     std::atomic<float> inputPeakHold { 0 }, limiterHoldDb { 0 };   // the loudest since the last gig check
     // emergency bypass on the output: 0 off, 1 dry guitar straight through, 2 silence
     std::atomic<int> panic { 0 };
+    // its own MIDI switch: kept apart from the other MIDI mappings (same in every preset, saved with the app)
+    std::atomic<int> panicKind { -1 }, panicNum { 0 };
+    std::atomic<bool> panicLatch { false };          // a latching switch: on = bypass, off = rig
+    std::atomic<bool> panicLearn { false }, panicLearned { false }, panicFromMidi { false };
+    std::atomic<int> panicSetFromMidi { -1 };        // latching switch: 1 = wants bypass, 0 = wants the rig
+    void armPanicLearn() { panicLearnStage = 0; panicSawRelease = false; panicLearnSeen = 0; panicLearn = true; }
     double getCpuLoad() const { return loadMeasurer.getLoadAsProportion(); }
 
     // ---- MIDI learn
@@ -187,6 +193,9 @@ private:
     std::vector<std::shared_ptr<Block>> spillBlocks;
     double spillStarted = 0;
     float panicSm = 0, panicMuteSm = 0;
+    std::atomic<int> panicLearnStage { 0 }, panicCandKind { -1 }, panicCandNum { 0 };
+    std::atomic<bool> panicSawRelease { false };
+    double panicLearnSeen = 0;
     std::atomic<float> spillGain { 0 };
     float trimSm = 1.0f;
     ndsp::Biquad eqF[2][7];

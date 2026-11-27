@@ -67,6 +67,9 @@ NAMHomeProcessor::NAMHomeProcessor()
         flag.replaceWithText ("running");
     }
     loadSetlist (appSettings->getValue ("setlist"));
+    engine.panicKind = appSettings->getIntValue ("panicMidiKind", -1);
+    engine.panicNum = appSettings->getIntValue ("panicMidiNum", 0);
+    engine.panicLatch = appSettings->getBoolValue ("panicMidiLatch", false);
     loadOutputSettings();
     ndsp::SaxSampleBank::get().setRoot (library.getFolder());
     rhythm::setLibraryFolder (library.getFolder());   // loops and drum sounds live on the same drive   // recordings live next to your captures (on your SSD)
@@ -346,6 +349,17 @@ void NAMHomeProcessor::timerCallback()
 {
     engine.pollMessageThread();
     if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepSetlist (st);
+    if (engine.panicLearned.exchange (false))
+    {
+        appSettings->setValue ("panicMidiKind", engine.panicKind.load());
+        appSettings->setValue ("panicMidiNum", engine.panicNum.load());
+        appSettings->setValue ("panicMidiLatch", engine.panicLatch.load());
+        appSettings->saveIfNeeded();
+        if (onNotice) onNotice ("Emergency button is now " + panicMidiText() + ".");
+    }
+    if (engine.panicFromMidi.exchange (false)) triggerPanic();
+    if (const int want = engine.panicSetFromMidi.exchange (-1); want >= 0)
+        if ((want == 1) != panicActive()) triggerPanic();
     if (! releases.empty())
     {
         const double now = juce::Time::getMillisecondCounterHiRes();
@@ -754,3 +768,18 @@ std::vector<NAMHomeProcessor::GigItem> NAMHomeProcessor::gigCheck (juce::AudioDe
     return out;
 }
 
+
+juce::String NAMHomeProcessor::panicMidiText() const
+{
+    const int k = engine.panicKind.load(), n = engine.panicNum.load();
+    if (k < 0) return "not set";
+    juce::String s = k == Engine::kindCC ? "CC " + juce::String (n) : k == Engine::kindNote ? "Note " + juce::MidiMessage::getMidiNoteName (n, true, true, 4) : "Program " + juce::String (n + 1);
+    return s + (engine.panicLatch.load() ? " (latching)" : "");
+}
+
+void NAMHomeProcessor::clearPanicMidi()
+{
+    engine.panicKind = -1;
+    appSettings->setValue ("panicMidiKind", -1);
+    appSettings->saveIfNeeded();
+}

@@ -48,13 +48,15 @@ private:
 };
 
 // Settings > Live: what the emergency button does.
-class ControllerPage : public juce::Component
+class ControllerPage : public juce::Component, private juce::Timer
 {
 public:
     explicit ControllerPage (NAMHomeProcessor& p);
     void resized() override;
 private:
+    void timerCallback() override;
     NAMHomeProcessor& proc;
-    juce::Label panicTitle, help;
+    juce::Label panicTitle, help, midiLabel;
     juce::ComboBox panicBox, safeBox;
+    juce::TextButton learn { "MIDI learn the emergency switch" }, clear { "Clear" };
 };

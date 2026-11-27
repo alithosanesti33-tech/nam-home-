@@ -211,7 +211,9 @@ void LiveView::paint (Graphics& g)
     }
     {
         const int pm = proc.panicMode();
-        bigButton (g, panicR, "Emergency", pm == 0 ? "dry guitar" : pm == 1 ? "mute" : "safe preset", proc.panicActive(), theme::warn, pressed == 300, 22.0f * hs);
+        const String what = pm == 0 ? "dry guitar" : pm == 1 ? "mute" : "safe preset";
+        const String sw = proc.engine.panicKind.load() >= 0 ? "  -  " + proc.panicMidiText() : String();
+        bigButton (g, panicR, "Emergency", what + sw, proc.panicActive(), theme::warn, pressed == 300, 22.0f * hs);
         if (! proc.panicActive()) { g.setColour (theme::warn); g.drawRoundedRectangle (panicR.toFloat().reduced (1.5f), 14.0f, 2.5f); }
     }
 }
@@ -230,7 +232,18 @@ void LiveView::mouseDown (const MouseEvent& e)
         }
     if (panicR.contains (pt))
     {
-        if (e.mods.isPopupMenu()) return;
+        if (e.mods.isPopupMenu())
+        {
+            PopupMenu m;
+            m.addItem (1, "MIDI learn the emergency switch  (now " + proc.panicMidiText() + ")");
+            m.addItem (2, "Clear its MIDI", proc.engine.panicKind.load() >= 0);
+            m.showMenuAsync (PopupMenu::Options(), [this] (int r)
+            {
+                if (r == 1) { proc.engine.armPanicLearn(); if (onMessage) onMessage ("Press the switch on your controller now...", false); }
+                if (r == 2) proc.clearPanicMidi();
+            });
+            return;
+        }
         pressed = 300; proc.triggerPanic(); repaint(); return;
     }
     for (int i = 0; i < 8; ++i)
@@ -305,7 +318,19 @@ ControllerPage::ControllerPage (NAMHomeProcessor& p) : proc (p)
     if (i >= 0) safeBox.setSelectedItemIndex (i, dontSendNotification);
     safeBox.onChange = [this] { proc.settings().setValue ("safePreset", safeBox.getText()); };
     safeBox.setVisible (proc.panicMode() == 2);
-    for (auto* c : std::initializer_list<Component*> { &panicTitle, &help, &panicBox, &safeBox }) addAndMakeVisible (c);
+    learn.onClick = [this] { proc.engine.armPanicLearn(); midiLabel.setText ("Press the switch on your controller now...", dontSendNotification); };
+    clear.onClick = [this] { proc.clearPanicMidi(); };
+    midiLabel.setFont (theme::font (13.0f, 1));
+    midiLabel.setColour (Label::textColourId, theme::muted);
+    for (auto* c : std::initializer_list<Component*> { &panicTitle, &help, &panicBox, &safeBox, &learn, &clear, &midiLabel }) addAndMakeVisible (c);
+    timerCallback();
+    startTimerHz (5);
+}
+
+void ControllerPage::timerCallback()
+{
+    if (! proc.engine.panicLearn.load())
+        midiLabel.setText ("Switch: " + proc.panicMidiText() + "  (works in every preset)", dontSendNotification);
 }
 
 void ControllerPage::resized()
@@ -317,4 +342,9 @@ void ControllerPage::resized()
     auto row = r.removeFromTop (30);
     panicBox.setBounds (row.removeFromLeft (250)); row.removeFromLeft (8);
     safeBox.setBounds (row.removeFromLeft (240));
+    r.removeFromTop (12);
+    row = r.removeFromTop (30);
+    learn.setBounds (row.removeFromLeft (250)); row.removeFromLeft (8);
+    clear.setBounds (row.removeFromLeft (80)); row.removeFromLeft (12);
+    midiLabel.setBounds (row);
 }

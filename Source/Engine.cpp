@@ -406,6 +406,18 @@ void Engine::pollMessageThread()
             learnArmed = false;
         }
     }
+    if (panicLearn.load() && panicLearnStage.load() == 1)
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (panicLearnSeen == 0) panicLearnSeen = now;
+        else if (now - panicLearnSeen > 650.0)   // wait briefly to see whether the switch also sends a release
+        {
+            const int kind = panicCandKind.load();
+            panicKind = kind; panicNum = panicCandNum.load();
+            panicLatch = kind == kindCC && ! panicSawRelease.load();
+            panicLearnStage = 0; panicLearn = false; panicLearned = true;
+        }
+    }
     if (tapFromMidi.exchange (false)) tapTempo();
     const int ps = pendingScene.exchange (-1);
     if (ps >= 0) selectScene (ps);
@@ -468,6 +480,20 @@ void Engine::handleMidi (juce::MidiBuffer& midi, const Plan& plan)
         lastKind = kind; lastNum = num; lastVal = val; lastChannel = msg.getChannel();
         if (kind == kindCC) lastCc = num;
 
+        // the emergency button's own switch (learned separately, so nothing else changes)
+        if (panicLearn.load())
+        {
+            if (panicLearnStage.load() == 0) { panicCandKind = kind; panicCandNum = num; panicSawRelease = false; panicLearnStage = 1; }
+            else if (panicCandKind.load() == kind && panicCandNum.load() == num && val < 64) panicSawRelease = true;
+            continue;
+        }
+        const bool panicHit = kind == panicKind.load() && num == panicNum.load();
+        if (panicHit)
+        {
+            if (panicLatch.load()) panicSetFromMidi = val >= 64 ? 1 : 0;
+            else if (val >= 64) panicFromMidi = true;
+        }
+
         if (learnArmed.load())
         {
             if (learnStage.load() == 0)
@@ -484,7 +510,7 @@ void Engine::handleMidi (juce::MidiBuffer& midi, const Plan& plan)
         bool used = false;
         for (auto& m : mappings)
             if (m.kind == kind && m.number == num) { applyMapping (m, val, val >= 64, plan); used = true; }
-        if (kind == kindProgram && ! used) pendingProgram = num;   // unlearned program changes switch presets
+        if (kind == kindProgram && ! used && ! panicHit) pendingProgram = num;   // unlearned program changes switch presets
     }
 }
 

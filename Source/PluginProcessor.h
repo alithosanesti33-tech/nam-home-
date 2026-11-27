@@ -124,6 +124,8 @@ public:
     int panicMode() const { return appSettings->getIntValue ("panicMode", 0); }
     void triggerPanic();
     bool panicActive() const { return engine.panic.load() != 0; }
+    juce::String panicMidiText() const;            // "CC 20", or "not set"
+    void clearPanicMidi();
     // the live performance strip: six buttons, each an action ("tuner", "tap", "scene+", "type:Delay"...)
     static constexpr int stripSlots = 6;
     juce::StringArray stripActions() const;
