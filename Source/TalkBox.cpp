@@ -1,54 +1,60 @@
 // Talk box (Heil style), whisper mode.
 //
-// A real talk box plays the amp into your mouth through a tube and a mic picks up the result. Here
-// it works the other way round: your mic hears you whisper the words, the block reads the shape of
-// your mouth from it (28 bands, about 500 times a second) and gives the guitar that shape, after a
-// Heil-style horn-driver and tube voicing. Put it right after the amp, where a Heil goes.
+// A real talk box plays the amp into your mouth through a tube; your mouth's shape filters it and a
+// mic picks that up. Here your mic hears you whisper, and the block reads your mouth's resonances
+// the way speech analysis does (linear prediction: about 18 resonance stages, a new reading every
+// 4 ms from the last 16 ms of your whisper). The Heil-voiced guitar is then run through that same
+// mouth filter, so the guitar says the words, consonants and all.
 //
-// Feedback: your mic is never played through the speakers, so there is no loop to ring. What the
-// speakers CAN do is leak into the mic and confuse the reading, so:
-//  * an echo canceller learns the path from your speakers to the mic and subtracts it
-//  * a bleed filter removes what is left in each band that still follows the speakers
-//  * a whisper gate only opens for you, with the closed-mouth sound in between
+// Your mic is only listened to, never played, so it can't feed back. An echo canceller takes your
+// speakers out of what it listens to, and the gate only opens for the breath of your whisper.
 #include "BlockTypes.h"
 
 using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tBleed, tClarity, tTone, tDrive, tTube, tClosed, tLevel, tMix, tBody, tSweep, tArtic };
-    constexpr float bandLo = 150.0f, bandHi = 6000.0f;
-    inline float bandFreq (int b) { return bandLo * std::pow (bandHi / bandLo, (float) b / (float) (TalkBoxBlock::numBands - 1)); }
+    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix };
+
+    // Levinson-Durbin: autocorrelation r[0..p] -> reflection coefficients k[0..p-1]
+    void levinson (const double* r, int p, float* k)
+    {
+        double a[TalkBoxBlock::maxOrder + 1] {}, tmp[TalkBoxBlock::maxOrder + 1] {};
+        a[0] = 1.0;
+        double e = r[0];
+        for (int i = 1; i <= p; ++i)
+        {
+            double acc = r[i];
+            for (int j = 1; j < i; ++j) acc += a[j] * r[i - j];
+            double ki = e > 1.0e-18 ? -acc / e : 0.0;
+            ki = juce::jlimit (-0.995, 0.995, ki);
+            for (int j = 1; j < i; ++j) tmp[j] = a[j] + ki * a[i - j];
+            for (int j = 1; j < i; ++j) a[j] = tmp[j];
+            a[i] = ki;
+            k[i - 1] = (float) ki;
+            e *= (1.0 - ki * ki);
+        }
+    }
 }
 
 TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
 {
     currentGroup = "Mic";
-    // set-and-forget: the mic is whichever input your guitar isn't on, and the whisper gate sets its
-    // own level from your room (how much the speakers leave behind), so you can just play
+    // set-and-forget: the mic is whichever input your guitar isn't on, and the gate sets its own
+    // level from your room
     addChoice ("mic", "Mic input", { "Auto (the other input)", "Input 1", "Input 2" }, 0);
     addFloat ("sens", "Mic level", -12, 36, 12, "dB", -1, 0.5f);
     addFloat ("gate", "Gate", 3, 24, 9, "dB", -1, 0.5f);
-    addToggle ("aec3", "Echo cancel", true);
-    addFloat ("bleed3", "Bleed cut", 0, 100, 0, "%", -1, 1);
+    addToggle ("aec4", "Echo cancel", true);
     currentGroup = "Talk box";
-    addFloat ("clarity5", "Clarity", 0, 100, 90, "%", -1, 1);   // new id: blocks already placed get the new default
-    addFloat ("tone2", "Tone", 1500, 9000, 5500, "Hz", 4500, 10);
+    addFloat ("words", "Clarity", 0, 100, 85, "%", -1, 1);          // how sharp the mouth's resonances are
+    addFloat ("tone3", "Tone", 2000, 7000, 5000, "Hz", 4000, 10);   // the Heil horn's top end
     addFloat ("drive", "Drive", 0, 100, 25, "%", -1, 1);
     addFloat ("tube", "Tube", 0, 100, 40, "%", -1, 1);
-    addFloat ("closed2", "Closed mouth", 0, 100, 40, "%", -1, 1);
+    addFloat ("closed3", "Closed mouth", 0, 100, 30, "%", -1, 1);
+    addFloat ("artic2", "Articulation", 0, 100, 60, "%", -1, 1);
     addFloat ("level", "Level", -24, 12, 0, "dB", -1, 0.1f);
     addFloat ("mix", "Mix", 0, 100, 100, "%", -1, 1);
-    // the low end: the horn and tube still push the low notes through your mouth, and a mic right at
-    // your lips adds proximity bass, so the bottom isn't shaped away
-    currentGroup = "Talk box";
-    addFloat ("body2", "Body", 0, 100, 40, "%", -1, 1);
-    // the mouth opening, like a real talk box: dark and muffled on "w"/"oo", blooming up into the
-    // treble as you spread your mouth into "ahh"/"eee"
-    addFloat ("opening2", "Mouth opening", 0, 100, 50, "%", -1, 1);
-    // enunciation: the sound dips on your consonant stops (t, k, p, b) and the gaps between
-    // syllables and pops back on the next one, so words come through as words
-    addFloat ("artic", "Articulation", 0, 100, 70, "%", -1, 1);
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
@@ -62,8 +68,7 @@ juce::String TalkBoxBlock::getSubtitle() const
         case 4:  return "Learning your speakers... keep playing";
         default: break;
     }
-    const float db = micLevelDb.load();
-    return db < -90.0f ? "Whisper to talk" : "Whisper to talk (mic " + juce::String ((int) std::round (db)) + " dB)";
+    return "Whisper to talk";
 }
 
 void TalkBoxBlock::prepare (double sr, int)
@@ -73,7 +78,15 @@ void TalkBoxBlock::prepare (double sr, int)
     const float aa = std::min (0.45f * aRate, 7000.0f);
     for (auto& f : micAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
     for (auto& f : refAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
+    for (auto& f : carAA) f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
+    for (auto& f : upLP)  f.set (Biquad::Type::LowPass, (float) sr, aa, 0.707f);
     micHP.set (Biquad::Type::HighPass, (float) sr, 100.0f, 0.707f);
+
+    aecTaps = (int) std::lround (0.064f * aRate);            // speaker-to-mic paths up to 64 ms
+    aecW.assign ((size_t) aecTaps, 0.0f);
+    aecX.assign ((size_t) aecTaps * 2, 0.0f);
+    refHist.assign ((size_t) aecTaps + 4, 0.0f);
+
     breathHP.set (Biquad::Type::HighPass, aRate, std::min (6200.0f, 0.4f * aRate), 0.707f);
     breathHP2.set (Biquad::Type::HighPass, aRate, std::min (6200.0f, 0.4f * aRate), 0.707f);
     breathLP.set (Biquad::Type::LowPass, aRate, 0.45f * aRate, 0.707f);
@@ -82,52 +95,22 @@ void TalkBoxBlock::prepare (double sr, int)
     artBP.set (Biquad::Type::BandPass, aRate, 1200.0f, 0.35f);
     artFC = 1.0f - std::exp (-1.0f / (0.003f * aRate));
     artSC = 1.0f - std::exp (-1.0f / (0.06f * aRate));
-    aecTaps = (int) std::lround (0.064f * aRate);            // speaker-to-mic paths up to 64 ms
-    aecW.assign ((size_t) aecTaps, 0.0f);
-    aecX.assign ((size_t) aecTaps * 2, 0.0f);
-    refHist.assign ((size_t) aecTaps + 4, 0.0f);
-    for (int b = 0; b < numBands; ++b)
-    {
-        const float fc = std::min (bandFreq (b), 0.44f * aRate);
-        anMic[b].set (Biquad::Type::BandPass, aRate, fc, 4.0f);
-        // a whisper is noise: each band is read over ~2 cycles of its bandwidth (at least 8 ms), so the
-        // reading is steady instead of flickering (the flicker is what sounded choppy and warbly)
-        const float bw = fc / 4.0f;
-        bandC[b] = 1.0f - std::exp (-1.0f / (std::max (0.004f, 1.5f / bw) * aRate));   // fast where consonants live
-        anRef[b].set (Biquad::Type::BandPass, aRate, fc, 4.0f);
-        carrier[b][0].set (Biquad::Type::BandPass, (float) sr, bandFreq (b), 3.2f);
-        carrier[b][1].set (Biquad::Type::BandPass, (float) sr, bandFreq (b), 3.2f);
-        // closed mouth ("mm"): a muffled hum, dark above ~600 Hz
-        const float f = bandFreq (b);
-        closed[b] = f < 600.0f ? 1.0f : std::pow (600.0f / f, 2.0f);
-    }
-    hp.set (Biquad::Type::HighPass, (float) sr, 70.0f, 0.707f);
-    bodyLP.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
-    bodyLP2.set (Biquad::Type::LowPass, (float) sr, 220.0f, 0.707f);
-    proximity.set (Biquad::Type::LowShelf, (float) sr, 200.0f, 0.7f, 2.0f);
-    for (auto* f : { &tmDryLo, &tmWetLo }) f->set (Biquad::Type::LowPass, (float) sr, 350.0f, 0.7f);
-    for (auto* f : { &tmDryHi, &tmWetHi }) f->set (Biquad::Type::BandPass, (float) sr, 2600.0f, 0.8f);
-    presence.set (Biquad::Type::Peak, (float) sr, 2000.0f, 0.8f, 4.0f);   // the Heil horn driver's honky mids
-    tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
-    tubeLine.setMaxSamples ((int) (0.02 * sr));
 
-    // level of the band bank with every band fully open, so "open mouth" = about unity gain
-    {
-        uint32_t seed = 12345u;
-        double inE = 0, outE = 0;
-        Biquad tmp[numBands][2];
-        for (int b = 0; b < numBands; ++b) { tmp[b][0] = carrier[b][0]; tmp[b][1] = carrier[b][1]; tmp[b][0].reset(); tmp[b][1].reset(); }
-        Biquad shape; shape.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.707f);   // guitar-like spectrum
-        for (int i = 0; i < (int) sr; ++i)
-        {
-            seed = seed * 1664525u + 1013904223u;
-            const float x = shape.process ((float) (seed >> 8) / 8388608.0f - 1.0f);
-            float y = 0;
-            for (int b = 0; b < numBands; ++b) y += tmp[b][1].process (tmp[b][0].process (x));
-            if (i > (int) (0.1 * sr)) { inE += (double) x * x; outE += (double) y * y; }
-        }
-        makeup = (float) std::sqrt (inE / std::max (1.0e-12, outE));
-    }
+    // mouth analysis order: about one resonance stage per kHz, plus a couple
+    order = juce::jlimit (12, maxOrder, (int) std::lround (aRate / 1000.0f) + 2);
+    for (int i = 0; i < frameLen; ++i) window[i] = 0.5f - 0.5f * std::cos (twoPi * (i + 0.5f) / frameLen);
+
+    // closed mouth ("mm"): a soft, dark shape
+    for (int i = 0; i < maxOrder; ++i) kClosed[i] = 0;
+    kClosed[0] = -0.92f; kClosed[1] = 0.35f;
+    gClosed = 0.075f;   // a closed mouth is quieter than your guitar (about 6 dB)
+
+    // Heil horn driver: no real lows, a honky mid push, rolled off above the Tone
+    hp.set (Biquad::Type::HighPass, (float) sr, 140.0f, 0.707f);
+    presence.set (Biquad::Type::Peak, (float) sr, 1800.0f, 0.8f, 4.0f);
+    tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
+    proximity.set (Biquad::Type::LowShelf, (float) sr, 250.0f, 0.7f, 2.5f);   // a mic right at your lips
+    tubeLine.setMaxSamples ((int) (0.02 * sr));
     reset();
 }
 
@@ -135,248 +118,199 @@ void TalkBoxBlock::reset()
 {
     for (auto& f : micAA) f.reset();
     for (auto& f : refAA) f.reset();
-    bodyLP.reset(); bodyLP2.reset(); proximity.reset(); sweepPeak.reset(); sweepLP.reset();
-    sweepPos = sweepSm = 0; sweepCount = 0; artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
-    tmLoDb = 0; tmHiDb = 0; tmCount = 0; for (auto& e : tmE) e = 0;
-    tmDryLo.reset(); tmWetLo.reset(); tmDryHi.reset(); tmWetHi.reset(); tmLoShelf.reset(); tmHiShelf.reset();
-    micHP.reset(); hp.reset(); lp1.reset(); lp2.reset(); presence.reset(); tube.reset(); tubeLine.clear();
+    for (auto& f : carAA) f.reset();
+    for (auto& f : upLP) f.reset();
+    for (auto& f : outLP) f.reset();
+    micHP.reset(); hp.reset(); lp1.reset(); lp2.reset(); presence.reset(); tube.reset(); proximity.reset(); tubeLine.clear();
+    breathHP.reset(); breathHP2.reset(); breathLP.reset(); refBHP.reset(); refBHP2.reset(); refBLP.reset(); artBP.reset();
     std::fill (aecW.begin(), aecW.end(), 0.0f);
     std::fill (aecX.begin(), aecX.end(), 0.0f);
     std::fill (refHist.begin(), refHist.end(), 0.0f);
+    aecPos = 0; refHistPos = 0; refPow = 1.0e-6f; echoDelay = 0;
     aecLearned = false; learnTime = 0; micPowSm = resPowSm = 0;
-    aecPos = 0; refHistPos = 0; refPow = 1.0e-6f; refPeakHold = 0; micPeak = 0; echoDelay = 0;
-    for (int b = 0; b < numBands; ++b)
-    {
-        anMic[b].reset(); anRef[b].reset(); carrier[b][0].reset(); carrier[b][1].reset();
-        eMic[b] = eRef[b] = leak[b] = 0;
-        target[b] = gain[b] = gainSm[b] = closed[b];
-    }
-    peakWhisper = 1.0e-9f; bloom = 1.0f; dryE = wetE = 0; levelComp = 1.4f;   // starts near the usual make-up, so it is never quiet at first
-    open = openSm = 0; whisperDb = -100; floorDb = -60; holdLeft = 0; likeSm = 0; breathPow = 0; breathDb = -120;
-    breathHP.reset(); breathHP2.reset(); breathLP.reset(); refBHP.reset(); refBHP2.reset(); refBLP.reset();
-    refBreathPow = 0; leakB = 0;
-    for (int b = 0; b < numBands; ++b) lastShaped[b] = longTerm[b] = 1.0f; limEnv = 0; decimCount = 0;
+    breathPow = refBreathPow = leakB = 0; breathDb = -120; floorDb = -60;
+    open = openSm = holdLeft = 0;
+    std::fill (std::begin (frame), std::end (frame), 0.0f); framePos = 0; preEm = 0;
+    for (int i = 0; i < maxOrder; ++i) kOld[i] = kNew[i] = kClosed[i];
+    std::fill (std::begin (lat), std::end (lat), 0.0f);
+    gOld = gNew = gClosed; interp = 0;
+    artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
+    carHold = outHold = 0; dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
+    decimCount = hopCount = delayCount = 0;
 }
 
-// one analysis-rate sample: echo cancel, bands, and every ~2 ms a new mouth shape
+// one analysis-rate sample of mic and speakers
 void TalkBoxBlock::analyse (float mic, float ref)
 {
-    // echo canceller: what the speakers put into the mic, learned while you aren't whispering
+    // echo canceller: what the speakers put into the mic, learned only while you're not whispering
     float e = mic;
     const bool aec = p (tAec) > 0.5f;
     {
         if (--aecPos < 0) aecPos = aecTaps - 1;
-        const float droppedRef = aecX[(size_t) aecPos];   // the oldest sample leaving the window
+        const float dropped = aecX[(size_t) aecPos];
         aecX[(size_t) aecPos] = ref; aecX[(size_t) (aecPos + aecTaps)] = ref;
         const float* x = &aecX[(size_t) aecPos];
-        refPow += ref * ref - droppedRef * droppedRef;
-        refPow = std::max (refPow, 1.0e-9f);
+        refPow = std::max (1.0e-9f, refPow + ref * ref - dropped * dropped);
         if (aec)
         {
             float yhat = 0;
             for (int k = 0; k < aecTaps; ++k) yhat += aecW[(size_t) k] * x[k];
             e = mic - yhat;
-            // learns fast while you aren't whispering, and almost not at all while you are, so your
-            // whisper never gets learned as "speaker"
             if (refPow > 1.0e-7f)
             {
-                // frozen while you whisper (it only learns the speakers between your words)
-                // never while you might be whispering (gate open, or any breath above the room), so
-                // it can't learn your voice as "speaker" and cancel it
                 const bool quiet = open < 0.5f && breathDb < floorDb + 3.0f;
                 const float mu = (! aecLearned ? 0.5f : (quiet ? 0.15f : 0.0f)) * e / (refPow + 1.0e-6f);
-                for (int k = 0; k < aecTaps; ++k) aecW[(size_t) k] += mu * x[k];
+                if (mu != 0.0f) for (int k = 0; k < aecTaps; ++k) aecW[(size_t) k] += mu * x[k];
             }
-        }
-        // has it learned your speakers yet? (until then it only learns, so your speakers can't open the gate)
-        const float c = 1.0f / (0.3f * aRate);
-        micPowSm += c * (mic * mic - micPowSm);
-        resPowSm += c * (e * e - resPowSm);
-        if (! aecLearned && refPow / aecTaps > 1.0e-6f)
-        {
-            learnTime += 1.0f / aRate;
-            const bool cancelled = resPowSm < 0.03f * micPowSm;                                    // 15 dB of the speakers removed
-            const bool noBleed = 10.0f * std::log10 (micPowSm + 1.0e-12f) < -75.0f;               // headphones / speakers far away
-            if ((cancelled && learnTime > 0.5f) || (noBleed && learnTime > 1.5f)) aecLearned = true;
-            if (learnTime > 4.0f) aecLearned = true;                                               // never wait forever
+            const float c = 1.0f / (0.3f * aRate);
+            micPowSm += c * (mic * mic - micPowSm);
+            resPowSm += c * (e * e - resPowSm);
+            if (! aecLearned && refPow / aecTaps > 1.0e-6f)
+            {
+                learnTime += 1.0f / aRate;
+                const bool cancelled = resPowSm < 0.03f * micPowSm;
+                const bool noBleed = 10.0f * std::log10 (micPowSm + 1.0e-12f) < -75.0f;
+                if ((cancelled && learnTime > 0.5f) || (noBleed && learnTime > 1.5f) || learnTime > 4.0f) aecLearned = true;
+            }
         }
         refHist[(size_t) refHistPos] = ref;
         refHistPos = (refHistPos + 1) % (int) refHist.size();
     }
-
-    // bands: your mouth (after echo cancelling) and the speakers (lined up with their echo)
     const int hs = (int) refHist.size();
     const float refD = refHist[(size_t) (((refHistPos - 1 - echoDelay) % hs + hs) % hs)];
-    {
-        const float vb = artBP.process (e);   // 300 Hz - 5 kHz of your whisper
-        artFast += artFC * (vb * vb - artFast);
-        artSlow += artSC * (vb * vb - artSlow);
-    }
-    {
-        const float hb = breathLP.process (breathHP2.process (breathHP.process (e)));
-        breathPow += breathC * (hb * hb - breathPow);
-        // the same band of what the speakers play, so their own treble (an open "ee" through the
-        // talk box) is taken back out of the gate's reading and can't hold it open
-        const float hr = refBLP.process (refBHP2.process (refBHP.process (refD)));
-        refBreathPow += breathC * (hr * hr - refBreathPow);
-    }
-    for (int b = 0; b < numBands; ++b)
-    {
-        const float m = anMic[b].process (e), r = anRef[b].process (refD);
-        const float pm = m * m, pr = r * r;
-        eMic[b] += bandC[b] * (pm - eMic[b]);
-        eRef[b] += bandC[b] * (pr - eRef[b]);
-    }
-
-    if (++delayCount >= (int) aRate / 2 && aec)   // twice a second: where is the speakers' echo?
+    if (aec && ++delayCount >= (int) aRate / 2)   // twice a second: where is the speakers' echo?
     {
         delayCount = 0;
         int best = 0; float bv = 0;
         for (int k = 0; k < aecTaps; ++k) if (std::abs (aecW[(size_t) k]) > bv) { bv = std::abs (aecW[(size_t) k]); best = k; }
         echoDelay = best;
     }
-    if (++hopCount < (int) (0.001f * aRate)) return;   // a new mouth shape every 1 ms
-    hopCount = 0;
 
-    // bleed filter: whatever in a band still follows the speakers is taken out
-    // gentle: it only turns down what follows the speakers, never cuts a band out completely
-    // (cutting bands to nothing is what made it choppy)
-    const float bleedK = 1.5f * p (tBleed) * 0.01f;
-    float refMax = 1.0e-12f;
-    for (int b = 0; b < numBands; ++b) refMax = std::max (refMax, eRef[b]);
-    float clean[numBands], total = 0;
-    for (int b = 0; b < numBands; ++b)
+    // the breath of your whisper (gate) and its level (articulation)
     {
-        // learned only between your words, and only in bands where the speakers are really playing
-        // (the talk box puts almost no highs out, so in the highs the mic is you, not the speakers)
-        if (eRef[b] > 1.0e-3f * refMax && eRef[b] > 1.0e-10f && open < 0.5f && breathDb < floorDb + 3.0f)
-        {
-            const float q = eMic[b] / eRef[b];
-            leak[b] += (q < leak[b] ? 0.025f : 0.0004f) * (q - leak[b]);   // the quietest the mic gets per unit of speaker
-        }
-        clean[b] = eRef[b] > 1.0e-3f * refMax ? std::max (0.5f * eMic[b], eMic[b] - bleedK * leak[b] * eRef[b]) : eMic[b];
-        total += clean[b];
+        const float hb = breathLP.process (breathHP2.process (breathHP.process (e)));
+        breathPow += breathC * (hb * hb - breathPow);
+        const float hr = refBLP.process (refBHP2.process (refBHP.process (refD)));
+        refBreathPow += breathC * (hr * hr - refBreathPow);
+        const float vb = artBP.process (e);
+        artFast += artFC * (vb * vb - artFast);
+        artSlow += artSC * (vb * vb - artSlow);
     }
 
-    // whisper gate (with hysteresis): your level after the speakers are taken out
-    whisperDb = 10.0f * std::log10 (total + 1.0e-12f);
-    micLevelDb = whisperDb;
-    // the room's floor: falls quickly to the quietest moments, rises only slowly (~5 s), so it settles
-    // on what your speakers and the room leave in the mic between your words
-    // The gate listens to the breath band (above ~5 kHz): your whisper's breath and "s" sounds live
-    // there, while the talk box's own sound (Heil low-pass, then the cab) has almost nothing there.
-    // So the speakers can't open it, however loud, and it can't lock itself open.
-    if (refBreathPow > 1.0e-12f && open < 0.5f)   // learned between your words: falls fast, rises slowly (~1 s)
+    // the mouth: your whisper (echo-cancelled) into the analysis frame
+    const float pe = e - 0.9f * preEm;   // pre-emphasis, so the higher resonances are read as well as the low ones
+    preEm = e;
+    frame[framePos] = pe;
+    framePos = (framePos + 1) % frameLen;
+
+    if (++hopCount >= hop) { hopCount = 0; newFrame(); }
+}
+
+// every 4 ms: gate, articulation and a new mouth reading
+void TalkBoxBlock::newFrame()
+{
+    const float hopSec = (float) hop / aRate;
+
+    // gate: breath above the room, with the speakers' own treble taken out
+    if (refBreathPow > 1.0e-12f && open < 0.5f)
     {
         const float q = breathPow / refBreathPow;
-        leakB += (q < leakB ? 0.02f : 0.001f) * (q - leakB);
+        leakB += (q < leakB ? 0.08f : 0.004f) * (q - leakB);
     }
     const float breathYou = std::max (0.1f * breathPow, breathPow - 3.0f * leakB * refBreathPow);
     breathDb = 10.0f * std::log10 (breathYou + 1.0e-12f);
-    const float wF = std::max (breathDb, -100.0f);   // a moment of total silence isn't the room's level
-    // (while it's learning your speakers it follows the leftover directly, so it starts at the right level)
-    if (aec && ! aecLearned) floorDb += 0.05f * (wF - floorDb);
-    else if (open < 0.5f)    floorDb += (wF < floorDb ? 0.01f : 0.0004f) * (wF - floorDb);   // frozen while you whisper
-    const float thr = std::max (-95.0f, floorDb + p (tGate));
+    micLevelDb = breathDb;
+    const bool aec = p (tAec) > 0.5f;
+    const float wF = std::max (breathDb, -100.0f);
+    if (aec && ! aecLearned) floorDb += 0.2f * (wF - floorDb);
+    else if (open < 0.5f)    floorDb += (wF < floorDb ? 0.04f : 0.0016f) * (wF - floorDb);
+    const float thr = std::max (-72.0f, floorDb + p (tGate));   // never below a real room's quietest
     if (aec && ! aecLearned) { open = 0.0f; status = 4; }
     else
     {
         if (breathDb > thr + 3.0f) { open = 1.0f; holdLeft = 0.18f; }
         else
         {
-            holdLeft -= 0.001f;                                         // a hop is 1 ms
-            // once open it stays open down to 6 dB under the opening level, so a held vowel (less breath
-            // than a consonant) keeps its shape; closes ~180 ms after you really stop
+            holdLeft -= hopSec;
             if (breathDb > thr - 6.0f) holdLeft = std::max (holdLeft, 0.05f);
             if (holdLeft <= 0.0f && breathDb < thr - 6.0f) open = 0.0f;
         }
         status = open > 0.5f ? 1 : 0;
     }
+    openSm += (open > openSm ? 0.35f : 0.06f) * (open - openSm);   // opens ~10 ms, closes ~65 ms
 
-    // articulation: your whisper right now (~4 ms) against the last ~50 ms. A stop consonant or a gap
-    // between syllables drops it, and the sound dips with it; the next syllable pops it back.
-    // (read straight from your echo-cancelled whisper, which reacts within ~3 ms)
+    // articulation: consonant stops and syllable gaps dip the sound
+    if (open < 0.5f) artFloor += (artFast < artFloor ? 0.2f : 0.008f) * (artFast - artFloor);
+    const float af = std::max (0.0f, artFast - 1.5f * artFloor), as = std::max (1.0e-12f, artSlow - 1.5f * artFloor);
+    const bool sounding = open > 0.5f && af > 0.2f * as;
+    const float r = open > 0.5f ? clamp (std::sqrt (af / as), 0.1f, 1.3f) : 1.0f;
+    artGain = 1.0f + p (tArtic) * 0.01f * (r - 1.0f);
+
+    // where the filter is now becomes the start of the next glide
+    for (int i = 0; i < order; ++i) kOld[i] = kNew[i];
+    gOld = gNew;
+
+    // the mouth reading, only while you're actually making sound (in the gaps the last shape is kept)
+    if (sounding)
     {
-        // the room's own leftover in that band (learned between your words) is taken out first,
-        // so loud speakers don't fill in your gaps
-        if (open < 0.5f) artFloor += (artFast < artFloor ? 0.05f : 0.002f) * (artFast - artFloor);
-        const float f = std::max (0.0f, artFast - 1.5f * artFloor), sl = std::max (1.0e-12f, artSlow - 1.5f * artFloor);
-        const float r = open > 0.5f ? clamp (std::sqrt (f / sl), 0.1f, 1.35f) : 1.0f;
-        artGain = 1.0f + p (tArtic) * 0.01f * (r - 1.0f);
-    }
-
-    // the mouth opens in ~10 ms and closes over ~80 ms, like a real mouth, never in one step
-    openSm += (open > openSm ? 0.1f : 0.0125f) * (open - openSm);
-
-    // mouth shape. A mouth's resonances are broad, so the shape is smoothed over ~5 bands (about an
-    // octave) and keeps a floor of full-range guitar: vowels bloom instead of sounding like a
-    // cocked wah. Clarity sets how far it goes.
-    const float mean = total / numBands + 1.0e-12f;
-    const float clarity = p (tClarity) * 0.01f;
-    const float ex = 0.5f * (0.7f + 1.9f * clarity);
-    float a[numBands], sm[numBands];
-    for (int b = 0; b < numBands; ++b) a[b] = std::pow (clean[b] / mean + 1.0e-4f, ex);
-    static const float kern[5] = { 0.1f, 0.22f, 0.36f, 0.22f, 0.1f };
-    float rms = 0;
-    for (int b = 0; b < numBands; ++b)
-    {
-        float acc = 0, wsum = 0;
-        for (int k = -2; k <= 2; ++k)
+        float w[frameLen];
+        for (int i = 0; i < frameLen; ++i) w[i] = frame[(framePos + i) % frameLen] * window[i];
+        double rr[maxOrder + 1];
+        for (int lag = 0; lag <= order; ++lag)
         {
-            const int j = b + k;
-            if (j < 0 || j >= numBands) continue;
-            acc += kern[k + 2] * a[j]; wsum += kern[k + 2];
+            double acc = 0;
+            for (int i = lag; i < frameLen; ++i) acc += (double) w[i] * w[i - lag];
+            rr[lag] = acc;
         }
-        sm[b] = acc / wsum;
-        rms += sm[b] * sm[b];
-    }
-    rms = std::sqrt (rms / numBands) + 1.0e-9f;
-    const float body = 0.3f - 0.22f * clarity;   // full-range guitar kept under the vowel
-
-    // bloom: how open / loud your whisper is right now, against your recent loudest. Opening up
-    // and whispering harder makes it bigger and brighter, like pushing more air through a Heil.
-    peakWhisper = std::max (total, peakWhisper * 0.9995f);
-    const float rel = clamp (total / (peakWhisper + 1.0e-12f), 0.0f, 1.0f);
-    bloom += 0.05f * ((0.45f + 0.55f * std::sqrt (std::sqrt (rel))) - bloom);
-
-    // where the sweep sits: the brightness of your vowel (its centre of gravity between ~400 Hz
-    // and ~2.5 kHz) plus how wide open you are. Closed mouth = heel down (dark).
-    {
-        float wsum = 0, lsum = 0;
-        for (int b = 0; b < numBands; ++b) { wsum += clean[b]; lsum += clean[b] * std::log (bandFreq (b)); }
-        const float logC = wsum > 0 ? lsum / wsum : std::log (400.0f);
-        // (only the bands the speakers aren't playing in count, so leftover guitar can't drag it dark)
-        float wsum2 = 0, lsum2 = 0;
-        for (int b = 0; b < numBands; ++b)
+        if (rr[0] > 1.0e-14)
         {
-            const float f = bandFreq (b);
-            if (f < 250.0f || f > 3600.0f) continue;   // where vowels differ
-            // Bleed cut off = your mic exactly as heard (after echo cancelling): nothing is taken out
-            const float you = std::max (0.0f, eMic[b] - (bleedK > 0.0f ? 4.0f * leak[b] * eRef[b] : 0.0f));
-            wsum2 += you; lsum2 += you * std::log (f);
+            // Clarity: how sharp the resonances are (a lag window widens them; 100% = sharpest)
+            const double bw = 40.0 + 260.0 * (1.0 - p (tClarity) * 0.01);   // resonance width in Hz
+            rr[0] *= 1.0001;
+            for (int lag = 1; lag <= order; ++lag)
+            {
+                const double x = twoPi * bw * lag / aRate;
+                rr[lag] *= std::exp (-0.5 * x * x);
+            }
+            float k[maxOrder];
+            levinson (rr, order, k);
+            for (int i = 0; i < order; ++i) kNew[i] = k[i];
+            // the mouth filter's own loudness is normalised away (the level comes from the guitar)
+            float st[maxOrder + 1] {}, en = 0;
+            for (int s = 0; s < 160; ++s)
+            {
+                float f = s == 0 ? 1.0f : 0.0f;
+                for (int i = order - 1; i >= 0; --i) { f -= k[i] * st[i]; st[i + 1] = st[i] + k[i] * f; }
+                st[0] = f;
+                en += f * f;
+            }
+            gNew = 1.0f / std::sqrt (std::max (en, 1.0e-6f));
         }
-        const float logC2 = wsum2 > 1.0e-12f ? lsum2 / wsum2 : logC;
-        const float bright = clamp ((logC2 - std::log (750.0f)) / (std::log (1900.0f) - std::log (750.0f)), 0.0f, 1.0f);
-        const float want = open > 0.5f ? clamp (0.85f * bright + 0.15f * std::sqrt (rel), 0.0f, 1.0f) : 0.0f;
-        sweepPos += (want > sweepPos ? 0.06f : 0.025f) * (want - sweepPos);   // opens ~15 ms, closes ~40 ms
     }
-
-    const float cl = p (tClosed) * 0.01f * 0.6f;
-    for (int b = 0; b < numBands; ++b)
+    else if (open < 0.5f)
     {
-        const float shaped = body + (1.0f - body) * sm[b] / rms;
-        // only while you're actually making sound: in the tiny gaps between syllables there's no
-        // whisper to read, so the last real mouth shape is kept (and Articulation dips the level)
-        if (open > 0.5f && artFast - 1.5f * artFloor > 0.2f * (artSlow - 1.5f * artFloor))
-        {
-            // tone balance: over a few seconds the talk box keeps your guitar's own treble/mids/bass,
-            // so what changes the sound is only your mouth moving, not a constant tilt
-            longTerm[b] += 0.00015f * (shaped - longTerm[b]);   // ~7 s, so a held vowel keeps its colour
-            lastShaped[b] = clamp (shaped / std::max (0.05f, longTerm[b]), 0.0f, 4.0f) * bloom;
-        }
-        target[b] = openSm * lastShaped[b] + (1.0f - openSm) * closed[b] * cl;
-        if (aec && ! aecLearned) target[b] = 0.7f;   // learning: full range, so every frequency gets learned
+        // closed: settle toward the closed-mouth "mm"
+        for (int i = 0; i < order; ++i) kNew[i] += 0.15f * (kClosed[i] - kNew[i]);
+        gNew += 0.15f * (gClosed - gNew);
     }
+    interp = 0;
+}
+
+// one carrier sample at the analysis rate through the mouth (the reflection coefficients glide
+// from the last reading to the new one over the 4 ms, so it never clicks)
+float TalkBoxBlock::mouth (float x)
+{
+    const float t = std::min (1.0f, (float) (++interp) / (float) hop);
+    float f = x;
+    for (int i = order - 1; i >= 0; --i)
+    {
+        const float ki = kOld[i] + (kNew[i] - kOld[i]) * t;
+        f -= ki * lat[i];
+        lat[i + 1] = lat[i] + ki * f;
+    }
+    lat[0] = f;
+    if (! std::isfinite (f) || std::abs (f) > 1.0e4f) { std::fill (std::begin (lat), std::end (lat), 0.0f); f = 0; }
+    return f * (gOld + (gNew - gOld) * t);
 }
 
 void TalkBoxBlock::process (float* L, float* R, int n)
@@ -392,108 +326,65 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float sens = dbToGain (p (tSens));
     const float drive = p (tDrive) * 0.01f, tubeAmt = p (tTube) * 0.01f;
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
-    lp1.set (Biquad::Type::LowPass, sampleRate, p (tTone), 0.65f);
-    lp2.set (Biquad::Type::LowPass, sampleRate, std::min (1.25f * p (tTone), 0.45f * sampleRate), 0.7f);   // steep above the Tone, like a Heil
-    const float gC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
+    const float closedLv = 0.3f + 0.7f * p (tClosed) * 0.01f;
+    const float tone = std::min (p (tTone), 0.42f * aRate);
+    lp1.set (Biquad::Type::LowPass, sampleRate, tone, 0.65f);
+    lp2.set (Biquad::Type::LowPass, sampleRate, std::min (1.25f * tone, 0.45f * sampleRate), 0.7f);
+    outLP[0].set (Biquad::Type::LowPass, sampleRate, std::min (1.15f * tone, 5600.0f), 0.54f);
+    outLP[1].set (Biquad::Type::LowPass, sampleRate, std::min (1.15f * tone, 5600.0f), 1.31f);
     const float limRel = 1.0f - std::exp (-1.0f / (0.1f * sampleRate));
     const float tubeDelay = 0.0105f * sampleRate;   // a ~1.8 m tube: resonances every ~95 Hz
     const float lmC = 1.0f / (0.3f * sampleRate);
     const float artC = 1.0f - std::exp (-1.0f / (0.002f * sampleRate));
-    const float tmC = 1.0f / (2.0f * sampleRate);
-    const float sweepSmC = 1.0f - std::exp (-1.0f / (0.004f * sampleRate));
-    const float bodyAmt = p (tBody) * 0.01f;
-    const float openSmA = openSm;
-    const float sweepAmt = p (tSweep) * 0.01f;
     auto& ring = OutputRing::get();
 
     for (int i = 0; i < n; ++i)
     {
-        // analysis side (mic and what went to the speakers, at ~16 kHz)
-        const float m = micAA[1].process (micAA[0].process (micHP.process (mic[i] * sens)));
-        const float ref = refAA[1].process (refAA[0].process (ring.at (n - 1 - i)));
-        if (++decimCount >= decim) { decimCount = 0; analyse (m, ref); }
-
-        // guitar side: Heil horn driver and tube, then your mouth
         const float dryL = L[i], dryR = R[i];
+
+        // the guitar through the Heil horn driver and tube (full rate)
         float v = hp.process (0.5f * (dryL + dryR));
         if (drive > 0.001f) v = fastTanh (v * (1.0f + 6.0f * drive)) / (1.0f + 1.5f * drive);
         v = lp2.process (lp1.process (presence.process (v)));
         const float back = tube.process (tubeLine.read (tubeDelay));
         v = v + 0.45f * tubeAmt * back;
         tubeLine.push (v);
-        const float voiced = v;
+        const float car = carAA[1].process (carAA[0].process (v));
 
-        float y = 0;
-        for (int b = 0; b < numBands; ++b)
+        // mic and speakers, down to the analysis rate
+        const float m = micAA[1].process (micAA[0].process (micHP.process (mic[i] * sens)));
+        const float ref = refAA[1].process (refAA[0].process (ring.at (n - 1 - i)));
+
+        // at the analysis rate: read the mouth, and put the guitar through it
+        float up = 0.0f;
+        if (++decimCount >= decim)
         {
-            gainSm[b] += gC * (target[b] - gainSm[b]);
-            y += gainSm[b] * carrier[b][1].process (carrier[b][0].process (v));
+            decimCount = 0;
+            analyse (m, ref);
+            outHold = mouth (car) * (closedLv + (1.0f - closedLv) * openSm);
+            up = outHold * (float) decim;   // back up to the full rate (zero-stuffed, then smoothed)
         }
-        y *= makeup;
-        // body: the low end under the vowels, and the close mic's proximity bass
-        y += bodyAmt * 1.6f * (0.55f + 0.45f * openSmA) * bodyLP2.process (bodyLP.process (v));
+        float y = upLP[1].process (upLP[0].process (up));
+        // the Heil's roll-off after the mouth too: nothing comes out above ~5.6 kHz, which is also
+        // where the gate listens for your breath, so the talk box can never hold the gate open
+        y = outLP[1].process (outLP[0].process (y));
         y = proximity.process (y);
-        // the mouth opening: a closed mouth lets only the dark low-mids out; as it spreads, the top
-        // opens up smoothly to the full Tone, with the slight resonance of the mouth cavity
-        if (sweepAmt > 0.001f)
-        {
-            if (--sweepCount <= 0)
-            {
-                sweepCount = 32;
-                const float top = p (tTone);
-                // closed ~900 Hz, an "ah" already ~2.5-3 kHz (the high mids stay: that's where the words are)
-                const float fc = 900.0f * std::exp (std::log (std::max (1000.0f, top) / 900.0f) * std::pow (sweepSm, 0.6f));
-                sweepLP.set (Biquad::Type::LowPass, sampleRate, std::min (fc, 0.45f * sampleRate), 1.1f);
-                sweepPeak.set (Biquad::Type::LowPass, sampleRate, std::min (fc, 0.45f * sampleRate), 0.6f);
-            }
-            sweepSm += sweepSmC * (sweepPos - sweepSm);
-            const float w = sweepPeak.process (sweepLP.process (y));
-            y = y * (1.0f - sweepAmt) + w * sweepAmt;
-        }
-        // tone match (slow, ~2 s, while you talk): the talk box's lows and high mids are kept in the
-        // same proportion as your guitar voiced by the Heil (horn honk, low cut, roll-off above the
-        // Tone), so you keep Frampton's Heil colour, the mouth shaping never dulls it, and only your
-        // mouth's movements change it
-        {
-            const float d = voiced;
-            if (openSm > 0.5f)
-            {
-                const float dl = tmDryLo.process (d), dh = tmDryHi.process (d), wl = tmWetLo.process (y), wh = tmWetHi.process (y);
-                tmE[0] += tmC * (dl * dl - tmE[0]); tmE[1] += tmC * (dh * dh - tmE[1]); tmE[2] += tmC * (d * d - tmE[2]);
-                tmE[3] += tmC * (wl * wl - tmE[3]); tmE[4] += tmC * (wh * wh - tmE[4]); tmE[5] += tmC * (y * y - tmE[5]);
-            }
-            if (--tmCount <= 0)
-            {
-                tmCount = 256;
-                if (tmE[2] > 1.0e-9f && tmE[5] > 1.0e-9f && tmE[3] > 1.0e-12f && tmE[4] > 1.0e-12f)
-                {
-                    const float lo = std::sqrt ((tmE[0] / tmE[2]) / (tmE[3] / tmE[5]));
-                    const float hi = std::sqrt ((tmE[1] / tmE[2]) / (tmE[4] / tmE[5]));
-                    tmLoDb = clamp (tmLoDb + 0.02f * 20.0f * std::log10 (std::max (1.0e-3f, lo)), -9.0f, 9.0f);
-                    tmHiDb = clamp (tmHiDb + 0.02f * 20.0f * std::log10 (std::max (1.0e-3f, hi)), -9.0f, 12.0f);
-                }
-                tmLoShelf.set (Biquad::Type::LowShelf, sampleRate, 350.0f, 0.7f, tmLoDb);
-                tmHiShelf.set (Biquad::Type::HighShelf, sampleRate, 1600.0f, 0.7f, tmHiDb);
-            }
-            y = tmHiShelf.process (tmLoShelf.process (y));
-        }
 
-        // articulation last, so the whole sound (body included) dips on your consonants and gaps
-        artSm += artC * (artGain - artSm);   // ~2 ms, so the dips are crisp but click-free
+        // articulation: the whole sound dips on your consonants and syllable gaps
+        artSm += artC * (artGain - artSm);
         y *= artSm;
 
-        // level match (slow, ~0.3 s): while your mouth is open, the talk box is as loud as the
-        // guitar going into it, so switching it on never drops your volume
-        if (openSm > 0.5f && artSm > 0.8f)   // the articulation dips don't count, so they stay dips
+        // level match (~0.3 s, while you talk): as loud as the guitar going in
+        if (openSm > 0.5f && artSm > 0.8f)
         {
             const float d = 0.5f * (dryL + dryR);
             dryE += lmC * (d * d - dryE);
             wetE += lmC * (y * y - wetE);
-            if (wetE > 1.0e-9f) levelComp += lmC * (clamp (0.8f * std::sqrt (dryE / wetE), 0.08f, 6.0f) - levelComp);
+            if (wetE > 1.0e-10f) levelComp += lmC * (clamp (0.9f * std::sqrt (dryE / wetE), 0.05f, 12.0f) - levelComp);
         }
         y *= levelComp * level;
 
-        // safety limiter: nothing the talk box does can jump out loud
+        // safety limiter
         const float a = std::abs (y);
         limEnv = a > limEnv ? a : limEnv + limRel * (a - limEnv);
         if (limEnv > 0.9f) y *= 0.9f / limEnv;
