@@ -1,6 +1,7 @@
 #pragma once
 #include <set>
 #include "Widgets.h"
+#include "LiveMode.h"
 #include "../Library.h"
 #include "../Blocks.h"
 
@@ -53,6 +54,7 @@ public:
     std::function<void()> onClose;
     std::function<void()> onDisplayChanged;   // zoom / font size
     std::function<void()> onToggleFullscreen;
+    std::function<void()> onMidiSetup;      // Controller page: start MIDI setup mode
     void showPage (int page);
 
 private:
@@ -68,6 +70,7 @@ private:
 
     // pages
     juce::Component audioPage, midiPage, libraryPage, t3kPage, displayPage, outputPage, setlistPage;
+    std::unique_ptr<ControllerPage> controllerPage;
     // output EQ (whole app, after everything) and spillover
     juce::OwnedArray<ValueKnob> eqKnobs;
     juce::ComboBox outProfile;

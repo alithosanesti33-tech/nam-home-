@@ -67,6 +67,7 @@ NAMHomeProcessor::NAMHomeProcessor()
         flag.replaceWithText ("running");
     }
     loadSetlist (appSettings->getValue ("setlist"));
+    engine.globalsFromVar (juce::JSON::parse (appSettings->getValue ("globalMidi")));
     loadOutputSettings();
     ndsp::SaxSampleBank::get().setRoot (library.getFolder());
     rhythm::setLibraryFolder (library.getFolder());   // loops and drum sounds live on the same drive   // recordings live next to your captures (on your SSD)
@@ -345,7 +346,28 @@ void NAMHomeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 void NAMHomeProcessor::timerCallback()
 {
     engine.pollMessageThread();
-    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepSetlist (st);
+    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepPresetAny (st);
+    if (engine.globalsChanged.exchange (false)) saveGlobalMidi();
+    if (engine.learnNote.isNotEmpty()) { if (onNotice) onNotice (engine.learnNote); engine.learnNote = {}; }
+    if (engine.panicFromMidi.exchange (false)) triggerPanic();
+    if (const int k = engine.presetSlotFromMidi.exchange (-1); k >= 0) loadBankSlot (k);
+    if (const int b = engine.bankStepFromMidi.exchange (0); b != 0) stepBank (b);
+    if (engine.tunerFromMidi.exchange (false)) performAction ("tuner");
+    if (const auto bits = engine.stripFromMidi.exchange (0); bits != 0)
+    {
+        const auto acts = stripActions();
+        for (int i = 0; i < stripSlots; ++i) if (bits & (1u << i)) performAction (acts[i]);
+    }
+    if (! releases.empty())
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        for (auto it = releases.begin(); it != releases.end();)
+        {
+            if (now < it->at) { ++it; continue; }
+            if (auto b = engine.findById (it->blockId)) if (it->param < (int) b->params.size()) b->params[(size_t) it->param]->set (0.0f);
+            it = releases.erase (it);
+        }
+    }
     autosaveTick();
     const int pc = engine.pendingProgram.exchange (-1);
     if (pc >= 0)
@@ -495,3 +517,340 @@ void NAMHomeProcessor::afterAmpLoaded (int row, int col)
 juce::AudioProcessorEditor* NAMHomeProcessor::createEditor() { return new NAMHomeEditor (*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new NAMHomeProcessor(); }
+
+//==============================================================================
+// live playing
+juce::StringArray NAMHomeProcessor::presetOrder() const
+{
+    return setlist.isEmpty() ? presets.list() : setlist;
+}
+
+bool NAMHomeProcessor::stepPresetAny (int delta)
+{
+    if (! setlist.isEmpty()) return stepSetlist (delta);
+    const auto names = presets.list();
+    if (names.isEmpty()) return false;
+    int i = names.indexOf (currentPreset);
+    i = (i < 0) ? (delta > 0 ? 0 : names.size() - 1) : (i + delta + names.size()) % names.size();
+    return loadPreset (names[i]);
+}
+
+void NAMHomeProcessor::loadBankSlot (int k)
+{
+    const auto names = presetOrder();
+    const int i = bankIndex * bankSize() + k;
+    if (i >= 0 && i < names.size())
+    {
+        if (! setlist.isEmpty()) setlistPos = i;
+        loadPreset (names[i]);
+    }
+}
+
+void NAMHomeProcessor::stepBank (int delta)
+{
+    const int n = presetOrder().size();
+    const int banks = juce::jmax (1, (n + bankSize() - 1) / bankSize());
+    bankIndex = (bankIndex + delta + banks) % banks;
+    const int a = bankIndex * bankSize() + 1;
+    if (onNotice) onNotice ("Bank " + juce::String (bankIndex + 1) + ": presets " + juce::String (a) + "-" + juce::String (juce::jmin (n, a + bankSize() - 1)));
+}
+
+void NAMHomeProcessor::triggerPanic()
+{
+    const int mode = panicMode();
+    if (engine.panic.load() != 0) { engine.panic = 0; if (onNotice) onNotice ("Emergency bypass off: your rig is back."); return; }
+    if (mode == 2)
+    {
+        const auto safe = appSettings->getValue ("safePreset");
+        if (safe.isNotEmpty() && presets.exists (safe)) { loadPreset (safe); if (onNotice) onNotice ("Safe preset loaded: " + safe); return; }
+        engine.panic = 1;   // no safe preset chosen: dry is the safest thing
+        if (onNotice) onNotice ("No safe preset chosen, so your dry guitar goes straight out. Press again to come back.");
+        return;
+    }
+    engine.panic = mode == 1 ? 2 : 1;
+    if (onNotice) onNotice (mode == 1 ? "Output muted. Press again to come back." : "Emergency bypass: dry guitar straight out. Press again to come back.");
+}
+
+juce::StringArray NAMHomeProcessor::stripActions() const
+{
+    juce::StringArray a;
+    a.addTokens (appSettings->getValue ("liveStrip", "tuner|scene+|type:Delay|type:Drive|tap|looper"), "|", {});
+    while (a.size() < stripSlots) a.add ("none");
+    a.removeRange (stripSlots, a.size());
+    return a;
+}
+
+void NAMHomeProcessor::setStripAction (int slot, const juce::String& action)
+{
+    auto a = stripActions();
+    if (slot < 0 || slot >= stripSlots) return;
+    a.set (slot, action);
+    appSettings->setValue ("liveStrip", a.joinIntoString ("|"));
+}
+
+juce::StringArray NAMHomeProcessor::allActions()
+{
+    juce::StringArray a { "tuner", "tap", "scene-", "scene+", "preset-", "preset+", "looper", "freeze", "granular", "talk", "panic", "none" };
+    for (auto t : Block::allTypes())
+        if (t != Block::Type::NamAmp && t != Block::Type::Cab) a.add ("type:" + Block::typeName (t));
+    return a;
+}
+
+juce::String NAMHomeProcessor::actionLabel (const juce::String& a)
+{
+    if (a == "tuner") return "Tuner";
+    if (a == "tap") return "Tap";
+    if (a == "scene-") return "Scene -";
+    if (a == "scene+") return "Scene +";
+    if (a == "preset-") return "Preset -";
+    if (a == "preset+") return "Preset +";
+    if (a == "looper") return "Looper";
+    if (a == "freeze") return "Freeze hold";
+    if (a == "granular") return "Granular hold";
+    if (a == "talk") return "Talk box";
+    if (a == "panic") return "Emergency";
+    if (a.startsWith ("type:")) return a.fromFirstOccurrenceOf (":", false, false);
+    return "(empty)";
+}
+
+namespace
+{
+    std::shared_ptr<Block> firstOfType (Engine& e, const juce::String& typeName)
+    {
+        for (int r = 0; r < Engine::rows; ++r)
+            for (int c = 0; c < Engine::cols; ++c)
+                if (auto b = e.get (r, c)) if (b->getTypeName() == typeName) return b;
+        return nullptr;
+    }
+    int paramIndex (const Block& b, const juce::String& id)
+    {
+        for (size_t i = 0; i < b.params.size(); ++i) if (b.params[i]->id == id) return (int) i;
+        return -1;
+    }
+}
+
+bool NAMHomeProcessor::actionLit (const juce::String& a) const
+{
+    auto& e = const_cast<Engine&> (engine);
+    if (a == "tuner") return engine.tunerOn.load();
+    if (a == "panic") return panicActive();
+    auto param = [&e] (const char* type, const char* id)
+    {
+        if (auto b = firstOfType (e, type)) { const int i = paramIndex (*b, id); return i >= 0 && b->params[(size_t) i]->on(); }
+        return false;
+    };
+    if (a == "freeze") return param ("Freeze", "hold");
+    if (a == "granular") return param ("Granular", "hold");
+    if (a == "talk") return param ("Talk box", "talk");
+    if (a.startsWith ("type:")) if (auto b = firstOfType (e, a.fromFirstOccurrenceOf (":", false, false))) return b->enabled.load();
+    return false;
+}
+
+void NAMHomeProcessor::performAction (const juce::String& a)
+{
+    auto toggleParam = [this] (const char* type, const char* id)
+    {
+        if (auto b = firstOfType (engine, type)) { const int i = paramIndex (*b, id); if (i >= 0) b->params[(size_t) i]->set (b->params[(size_t) i]->on() ? 0.0f : 1.0f); }
+        else if (onNotice) onNotice (juce::String ("There's no ") + type + " block in this rig.");
+    };
+    auto stepScene = [this] (int d)
+    {
+        const int cur = engine.currentScene.load();
+        for (int k = 1; k <= Engine::numScenes; ++k)
+        {
+            const int s = (cur + d * k + Engine::numScenes * 4) % Engine::numScenes;
+            if (engine.sceneIsUsed (s) || k == Engine::numScenes) { engine.selectScene (s); return; }
+        }
+    };
+    if (a == "tuner")
+    {
+        if (onToggleTuner) onToggleTuner();
+        else { engine.tunerOn = ! engine.tunerOn.load(); engine.tunerMute = true; }
+    }
+    else if (a == "tap") engine.tapTempo();
+    else if (a == "scene+") stepScene (1);
+    else if (a == "scene-") stepScene (-1);
+    else if (a == "preset+") stepPresetAny (1);
+    else if (a == "preset-") stepPresetAny (-1);
+    else if (a == "panic") triggerPanic();
+    else if (a == "freeze") toggleParam ("Freeze", "hold");
+    else if (a == "granular") toggleParam ("Granular", "hold");
+    else if (a == "talk") toggleParam ("Talk box", "talk");
+    else if (a == "looper")
+    {
+        // a footswitch press on the looper's main button (record / play / overdub)
+        if (auto b = firstOfType (engine, "Looper")) { b->params[0]->set (1.0f); releases.push_back ({ b->id, 0, juce::Time::getMillisecondCounterHiRes() + 120.0 }); }
+        else if (onNotice) onNotice ("There's no Looper block in this rig.");
+    }
+    else if (a.startsWith ("type:"))
+    {
+        const auto tn = a.fromFirstOccurrenceOf (":", false, false);
+        if (auto b = firstOfType (engine, tn)) { b->enabled = ! b->enabled.load(); dirty = true; }
+        else if (onNotice) onNotice ("There's no " + tn + " block in this rig.");
+    }
+}
+
+bool NAMHomeProcessor::revertPreset()
+{
+    if (currentPreset.isEmpty() || ! presets.exists (currentPreset)) return false;
+    snapshotIfChanged();           // so Cmd+Z can bring your edits back
+    const int scene = engine.currentScene.load();
+    if (! loadPreset (currentPreset)) return false;
+    if (scene != engine.currentScene.load() && engine.sceneIsUsed (scene)) engine.selectScene (scene);
+    return true;
+}
+
+namespace
+{
+    void collectPaths (const juce::var& v, juce::StringArray& out)
+    {
+        if (auto* o = v.getDynamicObject())
+        {
+            for (auto& p : o->getProperties())
+            {
+                if (p.name.toString() == "path" && p.value.isString() && p.value.toString().containsChar ('/')) out.addIfNotAlreadyThere (p.value.toString());
+                else collectPaths (p.value, out);
+            }
+        }
+        else if (auto* a = v.getArray()) for (auto& x : *a) collectPaths (x, out);
+    }
+}
+
+std::vector<NAMHomeProcessor::GigItem> NAMHomeProcessor::gigCheck (juce::AudioDeviceManager* dm)
+{
+    std::vector<GigItem> out;
+    // presets: every song in the setlist (or the current preset) opens, and every capture / IR it uses is there
+    juce::StringArray songs = setlist.isEmpty() ? juce::StringArray (currentPreset) : setlist;
+    songs.removeEmptyStrings();
+    int bad = 0, missingFiles = 0;
+    juce::StringArray missingNames;
+    for (auto& name : songs)
+    {
+        const auto v = presets.load (name);
+        if (! v.isObject()) { ++bad; out.push_back ({ false, "Preset \"" + name + "\" is missing or won't open." }); continue; }
+        juce::StringArray paths;
+        collectPaths (v, paths);
+        for (auto& p : paths)
+            if (! juce::File (p).existsAsFile()) { ++missingFiles; missingNames.addIfNotAlreadyThere (juce::File (p).getFileName() + " (in " + name + ")"); }
+    }
+    if (songs.isEmpty()) out.push_back ({ false, "No preset loaded and no setlist. Save your rig as a preset first." });
+    else if (bad == 0) out.push_back ({ true, setlist.isEmpty() ? "Current preset opens." : "All " + juce::String (songs.size()) + " setlist presets open." });
+    if (missingFiles == 0 && ! songs.isEmpty()) out.push_back ({ true, "All captures and IRs are there." });
+    else if (missingFiles > 0)
+    {
+        juce::String list = missingNames.size() > 4 ? missingNames.joinIntoString (", ", 0, 4) + "..." : missingNames.joinIntoString (", ");
+        out.push_back ({ false, juce::String (missingFiles) + " capture / IR file" + (missingFiles > 1 ? "s are" : " is") + " missing (is the SSD plugged in?): " + list });
+    }
+
+    // MIDI controller
+    const auto devs = juce::MidiInput::getAvailableDevices();
+    if (isPlugin()) out.push_back ({ true, "MIDI comes through Logic (check the track's MIDI input there)." });
+    else if (devs.isEmpty()) out.push_back ({ false, "No MIDI controller connected." });
+    else
+    {
+        juce::StringArray on;
+        for (auto& d : devs) if (dm == nullptr || dm->isMidiInputDeviceEnabled (d.identifier)) on.add (d.name);
+        if (on.isEmpty()) out.push_back ({ false, "A MIDI device is connected but switched off in Settings > MIDI." });
+        else out.push_back ({ true, "MIDI: " + on.joinIntoString (", ") });
+    }
+
+    // audio interface
+    if (isPlugin()) out.push_back ({ true, "Audio interface is chosen in Logic." });
+    else if (dm == nullptr || dm->getCurrentAudioDevice() == nullptr) out.push_back ({ false, "No audio interface is running. Pick one in Settings > Audio." });
+    else
+    {
+        auto* d = dm->getCurrentAudioDevice();
+        const auto nm = d->getName();
+        const bool builtIn = nm.containsIgnoreCase ("MacBook") || nm.containsIgnoreCase ("Built-in") || nm.containsIgnoreCase ("Microphone");
+        const int ins = d->getActiveInputChannels().countNumberOfSetBits();
+        if (ins == 0) out.push_back ({ false, nm + " has no input switched on. Turn on input 1 in Settings > Audio." });
+        else if (builtIn) out.push_back ({ false, "The audio device is " + nm + ", not your interface." });
+        else out.push_back ({ true, "Interface: " + nm + ", " + juce::String (d->getCurrentSampleRate() / 1000.0, 1) + " kHz, buffer " + juce::String (d->getCurrentBufferSizeSamples()) });
+    }
+
+    // levels since the last check
+    if (engine.inputPeakHold.load() > 0.98f) out.push_back ({ false, "Your input is clipping. Turn the gain down on your interface." });
+    else out.push_back ({ true, "Input level is fine." });
+    if (engine.limiterHoldDb.load() > 3.0f) out.push_back ({ false, "The output is hitting the safety limiter (" + juce::String (engine.limiterHoldDb.load(), 1) + " dB). Turn the output or the loudest preset down." });
+    else out.push_back ({ true, "Output isn't clipping." });
+    engine.inputPeakHold = 0; engine.limiterHoldDb = 0;
+
+    // CPU
+    const double cpu = engine.getCpuLoad();
+    if (cpu > 0.7) out.push_back ({ false, "CPU is at " + juce::String (juce::roundToInt (cpu * 100)) + "%. A larger buffer or fewer heavy blocks will make dropouts less likely." });
+    else out.push_back ({ true, "CPU is at " + juce::String (juce::roundToInt (cpu * 100)) + "%." });
+
+    // the safe preset
+    if (panicMode() == 2 && ! presets.exists (appSettings->getValue ("safePreset")))
+        out.push_back ({ false, "Emergency bypass is set to a safe preset, but none is chosen (Settings > Controller)." });
+    return out;
+}
+
+void NAMHomeProcessor::saveGlobalMidi()
+{
+    appSettings->setValue ("globalMidi", juce::JSON::toString (engine.globalsToVar(), true));
+    appSettings->saveIfNeeded();
+}
+
+juce::String NAMHomeProcessor::generateLayout (int layout, int switches, int sends, int first, bool latching)
+{
+    switches = juce::jlimit (1, 16, switches);
+    std::vector<Engine::Mapping> list;
+    // keep what isn't part of a layout (strip buttons, emergency bypass, tuner, tap) unless a switch now uses its message
+    auto messageFor = [&] (int k, int& kind, int& num)
+    {
+        kind = sends == 0 ? Engine::kindProgram : sends == 1 ? Engine::kindCC : Engine::kindNote;
+        num = sends == 0 ? (first - 1 + k) : first + k;
+    };
+    std::vector<std::pair<int, int>> used;
+    for (int k = 0; k < switches; ++k) { int kd, nm; messageFor (k, kd, nm); used.push_back ({ kd, nm }); }
+    for (auto& m : engine.globalMappings)
+    {
+        if (m.kind < 0) continue;
+        const bool layoutTarget = m.blockId == Engine::sceneMidiId || m.blockId == Engine::setlistMidiId || m.blockId == Engine::presetSlotMidiId
+                                  || m.blockId == Engine::bankMidiId || m.blockId == Engine::stompMidiId;
+        bool clash = false;
+        for (auto& u : used) if (u.first == m.kind && u.second == m.number) clash = true;
+        if (! layoutTarget && ! clash) list.push_back (m);
+    }
+    auto add = [&] (int k, int target, int param, const juce::String& name)
+    {
+        Engine::Mapping m;
+        messageFor (k, m.kind, m.number);
+        m.blockId = target; m.param = param; m.toggle = latching && sends == 1 ? 2 : 1; m.name = name;
+        list.push_back (m);
+    };
+    static const char* letters = "ABCDEFGH";
+    juce::String summary;
+    if (layout == 0)   // presets: the last two switches change bank
+    {
+        const int slots = switches >= 3 ? switches - 2 : switches;
+        for (int k = 0; k < slots; ++k) add (k, Engine::presetSlotMidiId, k, "Preset " + juce::String (k + 1));
+        if (switches >= 3) { add (switches - 2, Engine::bankMidiId, 0, "Bank down"); add (switches - 1, Engine::bankMidiId, 1, "Bank up"); }
+        appSettings->setValue ("bankSize", slots);
+        bankIndex = 0;
+        summary = "Preset mode: switches 1-" + juce::String (slots) + " pick a preset" + (switches >= 3 ? ", the last two change bank." : ".");
+    }
+    else if (layout == 1)   // scenes, with preset down / up on the last two when there are enough switches
+    {
+        const int sc = switches >= 6 ? juce::jmin (8, switches - 2) : juce::jmin (8, switches);
+        for (int k = 0; k < sc; ++k) add (k, Engine::sceneMidiId, k, juce::String ("Scene ") + letters[k]);
+        if (switches >= 6) { add (switches - 2, Engine::setlistMidiId, 0, "Preset down"); add (switches - 1, Engine::setlistMidiId, 1, "Preset up"); }
+        summary = "Scene mode: switches 1-" + juce::String (sc) + " pick scenes A-" + juce::String::charToString ((juce::juce_wchar) letters[sc - 1]) + (switches >= 6 ? ", the last two change preset." : ".");
+    }
+    else if (layout == 2)   // stomps: each switch turns an effect on or off, in the order they sit in the rig
+    {
+        for (int k = 0; k < switches; ++k) add (k, Engine::stompMidiId, k, "Stomp " + juce::String (k + 1));
+        summary = "Stomp mode: switch 1 is the first effect in your rig (amps and cabs skipped), switch 2 the next, and so on, in every preset.";
+    }
+    else   // hybrid: top half scenes, bottom half stomps
+    {
+        const int sc = juce::jmin (8, juce::jmax (1, switches / 2));
+        for (int k = 0; k < sc; ++k) add (k, Engine::sceneMidiId, k, juce::String ("Scene ") + letters[k]);
+        for (int k = sc; k < switches; ++k) add (k, Engine::stompMidiId, k - sc, "Stomp " + juce::String (k - sc + 1));
+        summary = "Hybrid mode: switches 1-" + juce::String (sc) + " are scenes, " + juce::String (sc + 1) + "-" + juce::String (switches) + " turn your first effects on and off.";
+    }
+    engine.setGlobals (list);
+    saveGlobalMidi();
+    return summary;
+}

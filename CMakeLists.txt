@@ -62,6 +62,7 @@ target_sources(NAMHome PRIVATE
     Source/ui/Panels.cpp
     Source/ui/Tuner.cpp
     Source/ui/SceneBar.cpp
+    Source/ui/LiveMode.cpp
 )
 
 # NAM core is built as its own object library and linked straight into the app.

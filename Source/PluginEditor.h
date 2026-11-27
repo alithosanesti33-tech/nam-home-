@@ -64,6 +64,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+    void mouseDown (const juce::MouseEvent&) override;
     void parentHierarchyChanged() override;
     // shortcuts (Cmd+Z...) work wherever the keyboard focus is, even after a menu closes
     struct KeyRelay : juce::KeyListener
@@ -119,6 +120,16 @@ private:
     std::unique_ptr<TunerPanel> tunerPanel;
     void openTuner();
     IconButton fullBtn { IconButton::Icon::Fullscreen, "Full screen" };
+    IconButton liveBtn { IconButton::Icon::Live, "Live mode: a big, safe performance screen (hold to exit)" };
+    std::unique_ptr<LiveView> liveView;
+    std::unique_ptr<MidiSetupOverlay> midiOverlay;
+    void enterLive();
+    void exitLive();
+    void startMidiSetup();
+    void endMidiSetup();
+    void showGigCheck();
+    juce::AudioDeviceManager* deviceManager() const;
+    juce::Rectangle<int> panicLabel;
     IconButton settingsBtn { IconButton::Icon::Gear, "Settings" };
 
     LibraryPanel library;

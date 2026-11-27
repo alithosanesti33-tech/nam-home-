@@ -39,8 +39,17 @@ ParamKnob::ParamKnob (NAMHomeProcessor& p, Block& b, int i, Colour c)
     midiText = proc.engine.describeMapping (block.id, index);
 }
 
+bool midiSetupClick (NAMHomeProcessor& proc, Block& block, int index)
+{
+    if (! proc.midiSetupMode) return false;
+    proc.engine.armLearn (block.id, index);
+    if (proc.onNotice) proc.onNotice ("\"" + block.params[(size_t) index]->name + "\": press the switch or move the control on your MIDI device now...");
+    return true;
+}
+
 void ParamKnob::sync()
 {
+    slider.setInterceptsMouseClicks (! proc.midiSetupMode, ! proc.midiSetupMode);
     if (! slider.isMouseButtonDown() && std::abs ((float) slider.getValue() - prm.get()) > 1.0e-6f)
         slider.setValue (prm.get(), dontSendNotification);
 }
@@ -103,7 +112,7 @@ void showMidiLearnMenu (Component& target, NAMHomeProcessor& proc, Block& block,
 
 void ParamKnob::mouseDown (const MouseEvent& e)
 {
-    if (! e.mods.isPopupMenu()) return;
+    if (! e.mods.isPopupMenu()) { midiSetupClick (proc, block, index); return; }
     showMidiLearnMenu (*this, proc, block, index, [this] { slider.setValue (prm.def); });
     midiText = proc.engine.describeMapping (block.id, index);
 }
@@ -149,6 +158,7 @@ void ParamSegments::paint (Graphics& g)
 
 void ParamSegments::mouseDown (const MouseEvent& e)
 {
+    if (! e.mods.isPopupMenu() && midiSetupClick (proc, block, index)) return;
     if (e.mods.isPopupMenu()) { showMidiLearnMenu (*this, proc, block, index, [this] { prm.set (prm.def); repaint(); if (onChange) onChange(); }); return; }
     const auto l = layout (getWidth());
     for (int i = 0; i < l.size(); ++i)
@@ -190,11 +200,13 @@ void ParamCombo::resized()
 
 void ParamCombo::mouseDown (const MouseEvent& e)
 {
+    if (! e.mods.isPopupMenu() && midiSetupClick (proc, block, index)) return;
     if (e.mods.isPopupMenu()) showMidiLearnMenu (*this, proc, block, index, [this] { prm.set (prm.def); sync(); if (onChange) onChange(); });
 }
 
 void ParamCombo::sync()
 {
+    box.setInterceptsMouseClicks (! proc.midiSetupMode, ! proc.midiSetupMode);
     if (box.getSelectedItemIndex() != prm.getInt()) box.setSelectedItemIndex (prm.getInt(), dontSendNotification);
 }
 
@@ -202,7 +214,14 @@ void ParamCombo::sync()
 void ParamSwitch::mouseDown (const MouseEvent& e)
 {
     if (e.mods.isPopupMenu()) { showMidiLearnMenu (*this, proc, block, index, [this] { prm.set (prm.def); sync(); if (onChange) onChange(); }); return; }
+    if (midiSetupClick (proc, block, index)) { setupSwallow = true; return; }
     ToggleButton::mouseDown (e);
+}
+
+void ParamSwitch::mouseUp (const MouseEvent& e)
+{
+    if (setupSwallow) { setupSwallow = false; return; }
+    ToggleButton::mouseUp (e);
 }
 
 ParamSwitch::ParamSwitch (NAMHomeProcessor& p, Block& b, int i) : ToggleButton (b.params[(size_t) i]->name), proc (p), block (b), index (i), prm (*b.params[(size_t) i])
@@ -401,6 +420,11 @@ void IconButton::paintButton (Graphics& g, bool over, bool down)
             }
             break;
         }
+        case Icon::Live:
+            // a stage: a play triangle inside a rounded frame
+            p.addRoundedRectangle (a.reduced (0.5f), 4.0f);
+            p.startNewSubPath (a.getX() + 7, a.getY() + 5); p.lineTo (a.getRight() - 5, a.getCentreY()); p.lineTo (a.getX() + 7, a.getBottom() - 5); p.closeSubPath();
+            break;
         case Icon::Power:
             p.addCentredArc (a.getCentreX(), a.getCentreY() + 1, 7, 7, 0, 0.6f, MathConstants<float>::twoPi - 0.6f, true);
             p.startNewSubPath (a.getCentreX(), a.getY()); p.lineTo (a.getCentreX(), a.getCentreY());

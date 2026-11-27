@@ -143,7 +143,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     applyDisplaySettings();
 
     for (auto* c : std::initializer_list<Component*> { &libraryBtn, &prevBtn, &nextBtn, &presetBtn, &saveBtn, &tempo, &tapBtn, &metroBtn, &transposeBtn,
-                                                       &browseT3k, &inMeter, &outMeter, &tunerBtn, &fullBtn, &settingsBtn, &library, &grid })
+                                                       &browseT3k, &inMeter, &outMeter, &tunerBtn, &fullBtn, &settingsBtn, &liveBtn, &library, &grid })
         addAndMakeVisible (c);
     addChildComponent (drawer);
     addAndMakeVisible (toasts);
@@ -210,6 +210,12 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     addChildComponent (*liveTuner);
     liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false));
     settingsBtn.onClick = [this] { openSettings(); };
+    liveBtn.onClick = [this] { enterLive(); };
+    proc.onToggleTuner = [this]
+    {
+        if (tunerPanel != nullptr) { tunerPanel->setVisible (false); MessageManager::callAsync ([this] { tunerPanel = nullptr; liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false)); resized(); }); }
+        else openTuner();
+    };
 
     library.onLoadFile = [this] (const File& f) { loadFromLibrary (f); };
     library.onAddEffect = [this] (Block::Type t, int v) { addEffectFromLibrary (t, v); };
@@ -285,7 +291,8 @@ NAMHomeEditor::~NAMHomeEditor()
     if (keyTop != nullptr) keyTop->removeKeyListener (&keyRelay);
     proc.settings().setValue ("winW", getWidth());
     proc.settings().setValue ("winH", getHeight());
-    proc.onNotice = nullptr; proc.onRigChanged = nullptr;
+    proc.onNotice = nullptr; proc.onRigChanged = nullptr; proc.onToggleTuner = nullptr;
+    proc.midiSetupMode = false;
     proc.library.onChanged = nullptr; proc.library.onNotice = nullptr;
     if (proc.tone3000 != nullptr) { proc.tone3000->onMessage = nullptr; proc.tone3000->onDownloaded = nullptr; }
     setLookAndFeel (nullptr);
@@ -332,6 +339,17 @@ void NAMHomeEditor::paint (Graphics& g)
     g.setFont (theme::font (12.0f, 1));
     const auto status = "CPU " + String (roundToInt (cpu * 100.0)) + "%   " + String (proc.getSampleRateNow() / 1000.0, 1) + " kHz";
     g.drawText (status, inMeter.getX() - 200, (int) bar.getY(), 168, (int) bar.getHeight(), Justification::centredRight);
+    panicLabel = {};
+    if (proc.panicActive())
+    {
+        // only shows while the emergency bypass is on; click it to come back
+        panicLabel = Rectangle<int> (inMeter.getX() - 200 - 190, (int) bar.getY() + 14, 180, (int) bar.getHeight() - 28);
+        g.setColour (theme::warn);
+        g.fillRoundedRectangle (panicLabel.toFloat(), 8.0f);
+        g.setColour (Colours::white);
+        g.setFont (theme::font (12.5f, 2));
+        g.drawText (proc.engine.panic.load() == 2 ? "MUTED - click to restore" : "BYPASSED - click to restore", panicLabel, Justification::centred);
+    }
 
     if (proc.engine.isLearning())
     {
@@ -369,6 +387,8 @@ void NAMHomeEditor::resized()
     tunerBtn.setBounds (t.removeFromRight (36));
     t.removeFromRight (4);
     analyzerBtn.setBounds (t.removeFromRight (36));
+    t.removeFromRight (4);
+    liveBtn.setBounds (t.removeFromRight (36));
     if (liveTuner != nullptr && liveTuner->isVisible()) { t.removeFromRight (8); liveTuner->setBounds (t.removeFromRight (170)); }
     t.removeFromRight (16);
     outMeter.setBounds (t.removeFromRight (90).withSizeKeepingCentre (90, 8));
@@ -403,6 +423,13 @@ void NAMHomeEditor::resized()
     toasts.setBounds (getLocalBounds().withTrimmedBottom (drawerOpen ? drawer.getHeight() + 30 : 20));
     if (settingsSheet != nullptr) settingsSheet->setBounds (getLocalBounds());
     if (tunerPanel != nullptr) tunerPanel->setBounds (getLocalBounds());
+    if (liveView != nullptr) liveView->setBounds (getLocalBounds());
+    if (midiOverlay != nullptr)
+    {
+        midiOverlay->setBounds (getLocalBounds().withTrimmedTop (topBar.getBottom() + 4));
+        midiOverlay->banner = Rectangle<int> (grid.getX(), grid.getY() - midiOverlay->getY(), grid.getWidth(), 44);
+        midiOverlay->resized();
+    }
 }
 
 void NAMHomeEditor::openTuner()
@@ -521,8 +548,24 @@ void NAMHomeEditor::parentHierarchyChanged()
     if (top != nullptr && top != this) top->addKeyListener (&keyRelay);
 }
 
+void NAMHomeEditor::mouseDown (const MouseEvent& e)
+{
+    if (! panicLabel.isEmpty() && panicLabel.contains (e.getPosition())) { proc.triggerPanic(); repaint(); }
+}
+
 bool NAMHomeEditor::keyPressed (const KeyPress& k)
 {
+    if (liveView != nullptr)
+    {
+        // live mode: no shortcuts (nothing gets deleted or edited by a stray key); Esc only closes the tuner
+        if (k == KeyPress::escapeKey && tunerPanel != nullptr) { tunerPanel->setVisible (false); MessageManager::callAsync ([this] { tunerPanel = nullptr; resized(); }); }
+        return true;
+    }
+    if (k == KeyPress::escapeKey && midiOverlay != nullptr)
+    {
+        if (proc.engine.isLearning()) proc.engine.cancelLearn(); else endMidiSetup();
+        return true;
+    }
     if (k == KeyPress::escapeKey)
     {
         if (tunerPanel != nullptr) { tunerPanel->setVisible (false); MessageManager::callAsync ([this] { tunerPanel = nullptr; liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false)); resized(); }); return true; }
@@ -606,7 +649,10 @@ void NAMHomeEditor::showPresetMenu()
     m.addItem (3, "Rename...", proc.currentPreset.isNotEmpty());
     m.addItem (4, "Delete", proc.currentPreset.isNotEmpty());
     m.addSeparator();
+    m.addItem (7, "Revert to last saved", proc.currentPreset.isNotEmpty() && proc.dirty);
+    m.addSeparator();
     m.addItem (5, "New rig");
+    m.addItem (8, "Gig check...");
     m.addItem (6, "Show presets folder");
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (presetBtn).withMinimumWidth (presetBtn.getWidth()), [this, names] (int r)
     {
@@ -630,6 +676,8 @@ void NAMHomeEditor::showPresetMenu()
         }
         else if (r == 5) proc.newRig();
         else if (r == 6) proc.presets.getFolder().revealToUser();
+        else if (r == 7) { if (proc.revertPreset()) message ("Back to \"" + proc.currentPreset + "\" as last saved. Cmd+Z brings your edits back."); }
+        else if (r == 8) showGigCheck();
         refreshAll();
     });
 }
@@ -678,6 +726,68 @@ void NAMHomeEditor::openSettings()
     settingsSheet->onClose = [this] { MessageManager::callAsync ([this] { settingsSheet = nullptr; }); };
     settingsSheet->onDisplayChanged = [this] { applyDisplaySettings(); };
     settingsSheet->onToggleFullscreen = [this] { toggleFullscreen(); };
+    settingsSheet->onMidiSetup = [this] { MessageManager::callAsync ([this] { settingsSheet = nullptr; startMidiSetup(); }); };
     addAndMakeVisible (*settingsSheet);
     settingsSheet->setBounds (getLocalBounds());
+}
+
+//==============================================================================
+AudioDeviceManager* NAMHomeEditor::deviceManager() const
+{
+   #if JucePlugin_Build_Standalone
+    if (auto* h = StandalonePluginHolder::getInstance()) return &h->deviceManager;
+   #endif
+    return nullptr;
+}
+
+void NAMHomeEditor::enterLive()
+{
+    if (midiOverlay != nullptr) endMidiSetup();
+    settingsSheet = nullptr;
+    closeDrawer();
+    liveView = std::make_unique<LiveView> (proc, deviceManager());
+    liveView->onExit = [this] { MessageManager::callAsync ([this] { exitLive(); }); };
+    liveView->onMessage = [this] (const String& s, bool w) { message (s, w); };
+    addAndMakeVisible (*liveView);
+    toasts.toFront (false);
+    liveView->setBounds (getLocalBounds());
+    liveView->grabKeyboardFocus();
+}
+
+void NAMHomeEditor::exitLive()
+{
+    liveView = nullptr;
+    refreshAll();
+    resized();
+    grabKeyboardFocus();
+}
+
+void NAMHomeEditor::startMidiSetup()
+{
+    proc.midiSetupMode = true;
+    midiOverlay = std::make_unique<MidiSetupOverlay> (proc);
+    midiOverlay->onDone = [this] { MessageManager::callAsync ([this] { endMidiSetup(); }); };
+    addAndMakeVisible (*midiOverlay);
+    toasts.toFront (false);
+    resized();
+    if (! drawerOpen) message ("MIDI setup mode: open a block, click a control, then press a switch. Esc or Done when you're finished.");
+}
+
+void NAMHomeEditor::endMidiSetup()
+{
+    proc.midiSetupMode = false;
+    proc.engine.cancelLearn();
+    midiOverlay = nullptr;
+    if (drawerOpen) drawer.sync();
+    repaint();
+}
+
+void NAMHomeEditor::showGigCheck()
+{
+    auto panel = std::make_unique<GigCheckPanel> (proc, deviceManager());
+    const int w = 640;
+    panel->setSize (w, panel->preferredHeight (w));
+    auto* raw = panel.get();
+    auto& box = CallOutBox::launchAsynchronously (std::move (panel), presetBtn.getScreenBounds(), nullptr);
+    raw->onClose = [&box] { box.dismiss(); };
 }

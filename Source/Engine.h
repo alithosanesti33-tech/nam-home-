@@ -94,6 +94,7 @@ public:
 
     // ---- meters
     std::atomic<float> inputPeak { 0 }, outputPeakL { 0 }, outputPeakR { 0 };
+    std::atomic<float> inputPeakHold { 0 }, limiterHoldDb { 0 };   // the loudest since the last gig check
     double getCpuLoad() const { return loadMeasurer.getLoadAsProportion(); }
 
     // ---- MIDI learn
@@ -107,6 +108,7 @@ public:
         int toggle = 0;              // 1 = each press toggles / steps; 0 = follow the value
         float lo = 0.0f, hi = 1.0f;  // expression pedal range: heel and toe positions of the control
         int curve = 0;               // 0 linear, 1 slow start, 2 fast start
+        juce::String name;           // your name for the switch ("Lead boost"), shown in the MIDI map
     };
     // expression pedal ranges, set from the control's MIDI menu
     void setMappingEnd (int blockId, int param, bool toe, float norm);
@@ -114,7 +116,33 @@ public:
     void resetMappingRange (int blockId, int param);
     const Mapping* findMapping (int blockId, int param) const;
     static constexpr int maxMappings = 128;
-    void armLearn (int blockId, int param);   // next MIDI message that arrives gets mapped here
+    void armLearn (int blockId, int param, bool global = false);   // next MIDI message that arrives gets mapped here
+    // ---- foot controller (global: the same in every preset, saved in the app's settings)
+    static constexpr int panicMidiId = -4;      // emergency bypass
+    static constexpr int presetSlotMidiId = -5; // param = switch in the bank
+    static constexpr int bankMidiId = -6;       // param 0 = bank down, 1 = bank up
+    static constexpr int stompMidiId = -7;      // param = k-th effect in the rig (stomp mode)
+    static constexpr int stripMidiId = -8;      // param = slot on the live performance strip
+    static constexpr int tunerMidiId = -9;
+    std::array<Mapping, 64> globalMappings;
+    std::atomic<bool> globalsChanged { false };
+    juce::var globalsToVar() const;
+    void globalsFromVar (const juce::var& v);
+    void setGlobals (const std::vector<Mapping>& list);
+    std::atomic<bool> panicFromMidi { false }, tunerFromMidi { false };
+    std::atomic<int> presetSlotFromMidi { -1 }, bankStepFromMidi { 0 };
+    std::atomic<juce::uint32> stripFromMidi { 0 };
+    // emergency bypass on the output: 0 off, 1 dry guitar straight through, 2 silence
+    std::atomic<int> panic { 0 };
+    // the MIDI map (setup page): every assignment, preset and global
+    struct MapInfo { bool global; int index; Mapping m; juce::String message, target; bool duplicate; };
+    std::vector<MapInfo> listMappings() const;
+    juce::String describeTarget (const Mapping& m) const;
+    void renameMapping (bool global, int index, const juce::String& name);
+    void removeMapping (bool global, int index);
+    static juce::String midiMessageName (int kind, int num);
+    juce::String learnNote;                    // message thread: e.g. a duplicate warning after learning
+    std::atomic<int> hitKind { -1 }, hitNum { 0 }, hitCount { 0 };   // the last MIDI that arrived (for the map's test light)
     void cancelLearn() { learnArmed = false; learnStage = 0; }
     bool isLearning() const { return learnArmed.load(); }
     void clearMappingsFor (int blockId, int param);
@@ -172,7 +200,7 @@ private:
     std::atomic<bool> learnArmed { false };
     std::atomic<int> learnBlock { 0 }, learnParam { 0 };
     std::atomic<int> learnStage { 0 }, learnedKind { -1 }, learnedNum { 0 };
-    std::atomic<bool> learnSawRelease { false };
+    std::atomic<bool> learnSawRelease { false }, learnGlobal { false };
     double learnFirstSeen = 0;
     void applyMapping (const Mapping& m, int value, bool press, const Plan& plan);
 
@@ -183,6 +211,7 @@ private:
     std::vector<float> spillBuf[2];
     std::vector<std::shared_ptr<Block>> spillBlocks;
     double spillStarted = 0;
+    float panicSm = 0, panicMuteSm = 0;
     std::atomic<float> spillGain { 0 };
     float trimSm = 1.0f;
     ndsp::Biquad eqF[2][7];

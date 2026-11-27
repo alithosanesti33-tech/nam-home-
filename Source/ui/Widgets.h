@@ -4,6 +4,9 @@
 
 class NAMHomeProcessor;
 
+// MIDI setup mode: a left click on any control starts MIDI learn for it (returns true if it did)
+bool midiSetupClick (NAMHomeProcessor& proc, Block& block, int paramIndex);
+
 // Right-click menu for MIDI learn on any control (knob, switch, choice).
 void showMidiLearnMenu (juce::Component& target, NAMHomeProcessor& proc, Block& block, int paramIndex, std::function<void()> resetToDefault);
 
@@ -18,6 +21,8 @@ public:
     void sync();                     // reflect changes from MIDI / presets
     std::function<void()> onChange;
     juce::Slider slider;
+    Block& getBlock() const { return block; }
+    int getIndex() const { return index; }
 private:
     NAMHomeProcessor& proc;
     Block& block;
@@ -37,6 +42,8 @@ public:
     void mouseExit (const juce::MouseEvent&) override { hoverIdx = -1; repaint(); }
     int preferredHeight (int width) const;
     std::function<void()> onChange;
+    Block& getBlock() const { return block; }
+    int getIndex() const { return index; }
 private:
     juce::Array<juce::Rectangle<int>> layout (int width) const;
     NAMHomeProcessor& proc;
@@ -56,6 +63,8 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void sync();
     std::function<void()> onChange;
+    Block& getBlock() const { return block; }
+    int getIndex() const { return index; }
 private:
     NAMHomeProcessor& proc;
     Block& block;
@@ -68,11 +77,15 @@ private:
 // Switch for a toggle parameter.
 class ParamSwitch : public juce::ToggleButton
 {
+    bool setupSwallow = false;
 public:
     ParamSwitch (NAMHomeProcessor& p, Block& b, int paramIndex);
     void sync() { setToggleState (prm.on(), juce::dontSendNotification); }
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     std::function<void()> onChange;
+    Block& getBlock() const { return block; }
+    int getIndex() const { return index; }
 private:
     NAMHomeProcessor& proc;
     Block& block;
@@ -122,7 +135,7 @@ private:
 class IconButton : public juce::Button
 {
 public:
-    enum class Icon { Gear, Fullscreen, Library, Metronome, Close, Chevron, Plus, Save, Prev, Next, Midi, Power, Tuner, Spectrum };
+    enum class Icon { Gear, Fullscreen, Library, Metronome, Close, Chevron, Plus, Save, Prev, Next, Midi, Power, Tuner, Spectrum, Live };
     IconButton (Icon i, const juce::String& tip) : juce::Button (tip), icon (i) { setTooltip (tip); }
     void paintButton (juce::Graphics&, bool over, bool down) override;
     Icon icon;

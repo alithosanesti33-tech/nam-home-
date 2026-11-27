@@ -322,8 +322,8 @@ static Label* styleLabel (Label& l, const String& text, float size = 13.0f, Colo
 
 SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : proc (p), deviceManager (dm)
 {
-    const char* pages[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists" };
-    for (int i = 0; i < 7; ++i)
+    const char* pages[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists", "Controller" };
+    for (int i = 0; i < 8; ++i)
     {
         auto* b = nav.add (new TextButton (pages[i]));
         b->setClickingTogglesState (true);
@@ -527,6 +527,9 @@ SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : pro
         setlistPage.addAndMakeVisible (c);
     refreshSetlists();
 
+    controllerPage = std::make_unique<ControllerPage> (proc);
+    controllerPage->onMidiSetup = [this] { if (onMidiSetup) onMidiSetup(); };
+    addChildComponent (*controllerPage);
     for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage, &outputPage, &setlistPage })
         addChildComponent (pg);
     showPage (0);
@@ -585,6 +588,7 @@ void SettingsSheet::showPage (int pg)
     displayPage.setVisible (pg == 4);
     outputPage.setVisible (pg == 5);
     setlistPage.setVisible (pg == 6);
+    if (controllerPage != nullptr) controllerPage->setVisible (pg == 7);
     repaint();
 }
 
@@ -612,7 +616,7 @@ void SettingsSheet::paint (Graphics& g)
     g.setColour (theme::text);
     g.setFont (theme::font (20.0f, 2));
     g.drawText ("Settings", (int) c.getX() + 24, (int) c.getY() + 22, 160, 28, Justification::centredLeft);
-    const char* titles[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists" };
+    const char* titles[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists", "Controller" };
     g.drawText (titles[page], (int) c.getX() + 228, (int) c.getY() + 22, 400, 28, Justification::centredLeft);
 }
 
@@ -625,6 +629,7 @@ void SettingsSheet::resized()
     auto content = c.withTrimmedLeft (220).withTrimmedTop (66).reduced (8, 16).withTrimmedRight (16);
     for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage, &outputPage, &setlistPage })
         pg->setBounds (content);
+    if (controllerPage != nullptr) controllerPage->setBounds (content);
 
     // output
     {
