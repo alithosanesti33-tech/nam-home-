@@ -14,7 +14,7 @@ using namespace ndsp;
 
 namespace
 {
-    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix, tCons };
+    enum TbP { tMic, tSens, tGate, tAec, tClarity, tTone, tDrive, tTube, tClosed, tArtic, tLevel, tMix, tCons, tFill, tRec };
 
     // Levinson-Durbin: autocorrelation r[0..p] -> reflection coefficients k[0..p-1]
     void levinson (const double* r, int p, float* k)
@@ -37,7 +37,7 @@ namespace
     }
 }
 
-TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
+TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox), juce::Thread ("NAM Home talk box test clip")
 {
     currentGroup = "Mic";
     // set-and-forget: the mic is whichever input your guitar isn't on, and the gate sets its own
@@ -60,10 +60,48 @@ TalkBoxBlock::TalkBoxBlock() : Block (Type::TalkBox)
     // are crisp and understandable, not just vowels
     currentGroup = "Talk box";
     addFloat ("cons", "Consonants", 0, 100, 50, "%", -1, 1);
+    // fill: grit only in the talking range (about 0.8-4 kHz), so every note, even a low or clean one,
+    // gives your mouth something to shape (why Frampton runs the talk box with some dirt)
+    addFloat ("fill", "Fill", 0, 100, 50, "%", -1, 1);
+    // record a 10 s test clip (your mic, the guitar going in, and the talk box) to
+    // Music/NAM Home/Talk Box Tests, to send for tuning
+    currentGroup = "Mic";
+    addToggle ("rectest", "Record test clip", false);
+    params[(size_t) tRec]->momentary = true;
+}
+
+TalkBoxBlock::~TalkBoxBlock() { stopThread (4000); }
+
+juce::File TalkBoxBlock::testFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("NAM Home").getChildFile ("Talk Box Tests");
+}
+
+// writes the finished test clip (off the audio thread)
+void TalkBoxBlock::run()
+{
+    auto dir = testFolder();
+    dir.createDirectory();
+    const auto name = "Talk box test " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S") + ".wav";
+    auto file = dir.getChildFile (name);
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> os (file.createOutputStream());
+    if (os == nullptr) { recState = 0; return; }
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), recRate, 3, 24, {}, 0));
+    if (w == nullptr) { recState = 0; return; }
+    os.release();
+    const float* chans[3] = { recMic.data(), recDry.data(), recOut.data() };
+    w->writeFromFloatArrays (chans, 3, recLen);
+    w.reset();
+    savedName = name;
+    recState = 3;   // saved
 }
 
 juce::String TalkBoxBlock::getSubtitle() const
 {
+    if (recState.load() == 1) return "Recording test clip... " + juce::String (juce::jmax (0, (recLen - recPos.load()) / juce::jmax (1, (int) recRate)) + 1) + " s";
+    if (recState.load() == 2) return "Saving test clip...";
+    if (recState.load() == 3) return "Saved: Music/NAM Home/Talk Box Tests";
     const int micIn = micUsed + 1;
     switch (status.load())
     {
@@ -119,6 +157,14 @@ void TalkBoxBlock::prepare (double sr, int)
     tube.set (Biquad::Type::LowPass, (float) sr, 3000.0f, 0.5f);
     proximity.set (Biquad::Type::LowShelf, (float) sr, 250.0f, 0.7f, 2.5f);   // a mic right at your lips
     tubeLine.setMaxSamples ((int) (0.02 * sr));
+    fillBP.set (Biquad::Type::BandPass, (float) sr, 1000.0f, 0.5f);
+    fillHP.set (Biquad::Type::HighPass, (float) sr, 800.0f, 0.707f);
+    fillLP.set (Biquad::Type::LowPass, (float) sr, 4500.0f, 0.707f);
+    fillEnvC = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
+    // test clip buffers (10 s), allocated here, never on the audio thread
+    recRate = sr;
+    recLen = (int) (10.0 * sr);
+    recMic.assign ((size_t) recLen, 0.0f); recDry.assign ((size_t) recLen, 0.0f); recOut.assign ((size_t) recLen, 0.0f);
     reset();
 }
 
@@ -143,6 +189,7 @@ void TalkBoxBlock::reset()
     std::fill (std::begin (lat), std::end (lat), 0.0f);
     gOld = gNew = gClosed; interp = 0;
     artFast = artSlow = artFloor = 0; artGain = artSm = 1.0f;
+    fillBP.reset(); fillHP.reset(); fillLP.reset(); fillEnv = 0; lastRec = false;
     carHold = outHold = 0; deEm = 0; consSample = consEnv = consTarget = 0; consHissRef = 1.0f; consHP.reset(); consHP2.reset(); dryE = wetE = 0; levelComp = 1.0f; limEnv = 0;
     decimCount = hopCount = delayCount = 0;
 }
@@ -350,6 +397,11 @@ void TalkBoxBlock::process (float* L, float* R, int n)
     const float level = dbToGain (p (tLevel)), mix = p (tMix) * 0.01f;
     const float closedLv = 0.3f + 0.7f * p (tClosed) * 0.01f;
     const float consAmt = p (tCons) * 0.01f;
+    const float fillAmt = p (tFill) * 0.01f;
+    // test clip: start on a press (if the last one isn't still being saved)
+    const bool recPress = p (tRec) > 0.5f;
+    if (recPress && ! lastRec && recState.load() != 1 && recState.load() != 2 && recLen > 0) { recPos = 0; recState = 1; }
+    lastRec = recPress;
     const float tone = std::min (p (tTone), 0.42f * aRate);
     lp1.set (Biquad::Type::LowPass, sampleRate, tone, 0.65f);
     lp2.set (Biquad::Type::LowPass, sampleRate, std::min (1.25f * tone, 0.45f * sampleRate), 0.7f);
@@ -368,6 +420,17 @@ void TalkBoxBlock::process (float* L, float* R, int n)
         // the guitar through the Heil horn driver and tube (full rate)
         float v = hp.process (0.5f * (dryL + dryR));
         if (drive > 0.001f) v = fastTanh (v * (1.0f + 6.0f * drive)) / (1.0f + 1.5f * drive);
+        // fill: harmonics only in the talking range, generated from the guitar itself and kept at a
+        // steady share of it, so a low or clean note still has sound where the words live
+        if (fillAmt > 0.001f)
+        {
+            // from the whole note (a low E has almost nothing up there to start from), driven hard
+            // whatever the level, so it always makes harmonics up into the talking range
+            const float fb = fillBP.process (v);
+            fillEnv += fillEnvC * (std::abs (v) - fillEnv);
+            const float g = clamp (10.0f * v / (fillEnv + 1.0e-6f) + 3.0f * fb / (fillEnv + 1.0e-6f), -1.0f, 1.0f) * fillEnv * 1.2f;
+            v += fillAmt * 4.0f * fillLP.process (fillHP.process (g));
+        }
         v = lp2.process (lp1.process (presence.process (v)));
         const float back = tube.process (tubeLine.read (tubeDelay));
         v = v + 0.45f * tubeAmt * back;
@@ -424,5 +487,18 @@ void TalkBoxBlock::process (float* L, float* R, int n)
 
         L[i] = y * mix + dryL * (1.0f - mix);
         R[i] = y * mix + dryR * (1.0f - mix);
+
+        if (recState.load() == 1)
+        {
+            const int rp = recPos.load();
+            if (rp < recLen)
+            {
+                recMic[(size_t) rp] = mic[i];
+                recDry[(size_t) rp] = cleanInput != nullptr ? cleanInput[i] : 0.5f * (dryL + dryR);
+                recOut[(size_t) rp] = L[i];
+                recPos = rp + 1;
+            }
+            else { recState = 2; startThread (juce::Thread::Priority::low); }
+        }
     }
 }

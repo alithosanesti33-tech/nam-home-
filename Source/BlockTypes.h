@@ -626,10 +626,12 @@ private:
 // played, so it can't feed back. From your whisper it reads your mouth's resonances the way speech
 // analysis does (linear prediction, ~18 resonance stages, a new reading every 4 ms) and runs the
 // Heil-voiced guitar through that same mouth filter, so the guitar says the words.
-class TalkBoxBlock : public Block
+class TalkBoxBlock : public Block, private juce::Thread
 {
 public:
     TalkBoxBlock();
+    ~TalkBoxBlock() override;
+    static juce::File testFolder();
     juce::String getSubtitle() const override;
     static constexpr int maxOrder = 24;
 protected:
@@ -637,6 +639,7 @@ protected:
     void reset() override;
     void process (float* L, float* R, int n) override;
 private:
+    void run() override;                   // writes a finished test clip
     void analyse (float mic, float ref);   // one sample at the analysis rate (~16 kHz)
     void newFrame();                       // every 4 ms: read the mouth from the last 16 ms
     float mouth (float carrier);           // one carrier sample through the mouth filter (analysis rate)
@@ -676,6 +679,13 @@ private:
     ndsp::Biquad hp, lp1, lp2, presence, tube, proximity;
     ndsp::DelayLine tubeLine;
     float carHold = 0, outHold = 0, deEm = 0;
+    ndsp::Biquad fillBP, fillHP, fillLP;
+    float fillEnv = 0, fillEnvC = 0.001f;
+    std::vector<float> recMic, recDry, recOut;
+    int recLen = 0; double recRate = 48000.0;
+    std::atomic<int> recPos { 0 }, recState { 0 };   // 0 idle, 1 recording, 2 saving, 3 saved
+    bool lastRec = false;
+    juce::String savedName;
     ndsp::Biquad consHP, consHP2;
     float consSample = 0, consEnv = 0, consTarget = 0, consHissRef = 1.0f;
     float dryE = 0, wetE = 0, levelComp = 1.0f, limEnv = 0;
