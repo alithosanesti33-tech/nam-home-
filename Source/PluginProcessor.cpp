@@ -67,7 +67,6 @@ NAMHomeProcessor::NAMHomeProcessor()
         flag.replaceWithText ("running");
     }
     loadSetlist (appSettings->getValue ("setlist"));
-    engine.globalsFromVar (juce::JSON::parse (appSettings->getValue ("globalMidi")));
     loadOutputSettings();
     ndsp::SaxSampleBank::get().setRoot (library.getFolder());
     rhythm::setLibraryFolder (library.getFolder());   // loops and drum sounds live on the same drive   // recordings live next to your captures (on your SSD)
@@ -346,18 +345,7 @@ void NAMHomeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 void NAMHomeProcessor::timerCallback()
 {
     engine.pollMessageThread();
-    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepPresetAny (st);
-    if (engine.globalsChanged.exchange (false)) saveGlobalMidi();
-    if (engine.learnNote.isNotEmpty()) { if (onNotice) onNotice (engine.learnNote); engine.learnNote = {}; }
-    if (engine.panicFromMidi.exchange (false)) triggerPanic();
-    if (const int k = engine.presetSlotFromMidi.exchange (-1); k >= 0) loadBankSlot (k);
-    if (const int b = engine.bankStepFromMidi.exchange (0); b != 0) stepBank (b);
-    if (engine.tunerFromMidi.exchange (false)) performAction ("tuner");
-    if (const auto bits = engine.stripFromMidi.exchange (0); bits != 0)
-    {
-        const auto acts = stripActions();
-        for (int i = 0; i < stripSlots; ++i) if (bits & (1u << i)) performAction (acts[i]);
-    }
+    if (const int st = engine.setlistStepFromMidi.exchange (0); st != 0) stepSetlist (st);
     if (! releases.empty())
     {
         const double now = juce::Time::getMillisecondCounterHiRes();
@@ -533,26 +521,6 @@ bool NAMHomeProcessor::stepPresetAny (int delta)
     int i = names.indexOf (currentPreset);
     i = (i < 0) ? (delta > 0 ? 0 : names.size() - 1) : (i + delta + names.size()) % names.size();
     return loadPreset (names[i]);
-}
-
-void NAMHomeProcessor::loadBankSlot (int k)
-{
-    const auto names = presetOrder();
-    const int i = bankIndex * bankSize() + k;
-    if (i >= 0 && i < names.size())
-    {
-        if (! setlist.isEmpty()) setlistPos = i;
-        loadPreset (names[i]);
-    }
-}
-
-void NAMHomeProcessor::stepBank (int delta)
-{
-    const int n = presetOrder().size();
-    const int banks = juce::jmax (1, (n + bankSize() - 1) / bankSize());
-    bankIndex = (bankIndex + delta + banks) % banks;
-    const int a = bankIndex * bankSize() + 1;
-    if (onNotice) onNotice ("Bank " + juce::String (bankIndex + 1) + ": presets " + juce::String (a) + "-" + juce::String (juce::jmin (n, a + bankSize() - 1)));
 }
 
 void NAMHomeProcessor::triggerPanic()
@@ -782,75 +750,7 @@ std::vector<NAMHomeProcessor::GigItem> NAMHomeProcessor::gigCheck (juce::AudioDe
 
     // the safe preset
     if (panicMode() == 2 && ! presets.exists (appSettings->getValue ("safePreset")))
-        out.push_back ({ false, "Emergency bypass is set to a safe preset, but none is chosen (Settings > Controller)." });
+        out.push_back ({ false, "Emergency bypass is set to a safe preset, but none is chosen (Settings > Live)." });
     return out;
 }
 
-void NAMHomeProcessor::saveGlobalMidi()
-{
-    appSettings->setValue ("globalMidi", juce::JSON::toString (engine.globalsToVar(), true));
-    appSettings->saveIfNeeded();
-}
-
-juce::String NAMHomeProcessor::generateLayout (int layout, int switches, int sends, int first, bool latching)
-{
-    switches = juce::jlimit (1, 16, switches);
-    std::vector<Engine::Mapping> list;
-    // keep what isn't part of a layout (strip buttons, emergency bypass, tuner, tap) unless a switch now uses its message
-    auto messageFor = [&] (int k, int& kind, int& num)
-    {
-        kind = sends == 0 ? Engine::kindProgram : sends == 1 ? Engine::kindCC : Engine::kindNote;
-        num = sends == 0 ? (first - 1 + k) : first + k;
-    };
-    std::vector<std::pair<int, int>> used;
-    for (int k = 0; k < switches; ++k) { int kd, nm; messageFor (k, kd, nm); used.push_back ({ kd, nm }); }
-    for (auto& m : engine.globalMappings)
-    {
-        if (m.kind < 0) continue;
-        const bool layoutTarget = m.blockId == Engine::sceneMidiId || m.blockId == Engine::setlistMidiId || m.blockId == Engine::presetSlotMidiId
-                                  || m.blockId == Engine::bankMidiId || m.blockId == Engine::stompMidiId;
-        bool clash = false;
-        for (auto& u : used) if (u.first == m.kind && u.second == m.number) clash = true;
-        if (! layoutTarget && ! clash) list.push_back (m);
-    }
-    auto add = [&] (int k, int target, int param, const juce::String& name)
-    {
-        Engine::Mapping m;
-        messageFor (k, m.kind, m.number);
-        m.blockId = target; m.param = param; m.toggle = latching && sends == 1 ? 2 : 1; m.name = name;
-        list.push_back (m);
-    };
-    static const char* letters = "ABCDEFGH";
-    juce::String summary;
-    if (layout == 0)   // presets: the last two switches change bank
-    {
-        const int slots = switches >= 3 ? switches - 2 : switches;
-        for (int k = 0; k < slots; ++k) add (k, Engine::presetSlotMidiId, k, "Preset " + juce::String (k + 1));
-        if (switches >= 3) { add (switches - 2, Engine::bankMidiId, 0, "Bank down"); add (switches - 1, Engine::bankMidiId, 1, "Bank up"); }
-        appSettings->setValue ("bankSize", slots);
-        bankIndex = 0;
-        summary = "Preset mode: switches 1-" + juce::String (slots) + " pick a preset" + (switches >= 3 ? ", the last two change bank." : ".");
-    }
-    else if (layout == 1)   // scenes, with preset down / up on the last two when there are enough switches
-    {
-        const int sc = switches >= 6 ? juce::jmin (8, switches - 2) : juce::jmin (8, switches);
-        for (int k = 0; k < sc; ++k) add (k, Engine::sceneMidiId, k, juce::String ("Scene ") + letters[k]);
-        if (switches >= 6) { add (switches - 2, Engine::setlistMidiId, 0, "Preset down"); add (switches - 1, Engine::setlistMidiId, 1, "Preset up"); }
-        summary = "Scene mode: switches 1-" + juce::String (sc) + " pick scenes A-" + juce::String::charToString ((juce::juce_wchar) letters[sc - 1]) + (switches >= 6 ? ", the last two change preset." : ".");
-    }
-    else if (layout == 2)   // stomps: each switch turns an effect on or off, in the order they sit in the rig
-    {
-        for (int k = 0; k < switches; ++k) add (k, Engine::stompMidiId, k, "Stomp " + juce::String (k + 1));
-        summary = "Stomp mode: switch 1 is the first effect in your rig (amps and cabs skipped), switch 2 the next, and so on, in every preset.";
-    }
-    else   // hybrid: top half scenes, bottom half stomps
-    {
-        const int sc = juce::jmin (8, juce::jmax (1, switches / 2));
-        for (int k = 0; k < sc; ++k) add (k, Engine::sceneMidiId, k, juce::String ("Scene ") + letters[k]);
-        for (int k = sc; k < switches; ++k) add (k, Engine::stompMidiId, k - sc, "Stomp " + juce::String (k - sc + 1));
-        summary = "Hybrid mode: switches 1-" + juce::String (sc) + " are scenes, " + juce::String (sc + 1) + "-" + juce::String (switches) + " turn your first effects on and off.";
-    }
-    engine.setGlobals (list);
-    saveGlobalMidi();
-    return summary;
-}

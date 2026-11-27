@@ -54,7 +54,6 @@ public:
     std::function<void()> onClose;
     std::function<void()> onDisplayChanged;   // zoom / font size
     std::function<void()> onToggleFullscreen;
-    std::function<void()> onMidiSetup;      // Controller page: start MIDI setup mode
     void showPage (int page);
 
 private:

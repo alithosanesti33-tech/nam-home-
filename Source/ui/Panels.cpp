@@ -322,7 +322,7 @@ static Label* styleLabel (Label& l, const String& text, float size = 13.0f, Colo
 
 SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : proc (p), deviceManager (dm)
 {
-    const char* pages[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists", "Controller" };
+    const char* pages[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists", "Live" };
     for (int i = 0; i < 8; ++i)
     {
         auto* b = nav.add (new TextButton (pages[i]));
@@ -528,7 +528,6 @@ SettingsSheet::SettingsSheet (NAMHomeProcessor& p, AudioDeviceManager* dm) : pro
     refreshSetlists();
 
     controllerPage = std::make_unique<ControllerPage> (proc);
-    controllerPage->onMidiSetup = [this] { if (onMidiSetup) onMidiSetup(); };
     addChildComponent (*controllerPage);
     for (auto* pg : std::initializer_list<Component*> { &audioPage, &midiPage, &libraryPage, &t3kPage, &displayPage, &outputPage, &setlistPage })
         addChildComponent (pg);
@@ -616,7 +615,7 @@ void SettingsSheet::paint (Graphics& g)
     g.setColour (theme::text);
     g.setFont (theme::font (20.0f, 2));
     g.drawText ("Settings", (int) c.getX() + 24, (int) c.getY() + 22, 160, 28, Justification::centredLeft);
-    const char* titles[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists", "Controller" };
+    const char* titles[] = { "Audio", "MIDI", "Library", "TONE3000", "Display", "Output", "Setlists", "Live" };
     g.drawText (titles[page], (int) c.getX() + 228, (int) c.getY() + 22, 400, 28, Justification::centredLeft);
 }
 

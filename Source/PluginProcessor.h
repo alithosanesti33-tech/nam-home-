@@ -120,10 +120,6 @@ public:
     // ---- live playing
     juce::StringArray presetOrder() const;          // the setlist if there is one, else presets A-Z
     bool stepPresetAny (int delta);                 // next / previous song or preset
-    int bankIndex = 0;
-    int bankSize() const { return juce::jmax (1, appSettings->getIntValue ("bankSize", 4)); }
-    void loadBankSlot (int k);
-    void stepBank (int delta);
     // emergency bypass: 0 dry guitar through, 1 mute, 2 load the safe preset
     int panicMode() const { return appSettings->getIntValue ("panicMode", 0); }
     void triggerPanic();
@@ -137,15 +133,12 @@ public:
     bool actionLit (const juce::String& action) const;
     void performAction (const juce::String& action);
     std::function<void()> onToggleTuner;
-    bool midiSetupMode = false;                     // message thread: clicking a control starts MIDI learn            // the editor opens its tuner; without it the tuner just mutes
     // revert: back to the preset as last saved (Cmd+Z still brings your edits back)
     bool revertPreset();
     // gig check
     struct GigItem { bool ok; juce::String text; };
     std::vector<GigItem> gigCheck (juce::AudioDeviceManager* dm);
-    // foot controller layouts: 0 presets, 1 scenes, 2 stomps, 3 hybrid; sends 0 PC, 1 CC, 2 notes
-    juce::String generateLayout (int layout, int switches, int sends, int first, bool latching);
-    void saveGlobalMidi();
+
 
 private:
     void timerCallback() override;

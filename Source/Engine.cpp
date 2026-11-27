@@ -325,9 +325,8 @@ void Engine::readTuner (float* dest, int n) const
     for (int i = 0; i < n; ++i) { dest[i] = tunerBuf[r]; r = (r + 1) & (tunerSize - 1); }
 }
 
-void Engine::armLearn (int blockId, int param, bool global)
+void Engine::armLearn (int blockId, int param)
 {
-    learnGlobal = global;
     learnBlock = blockId;
     learnParam = param;
     learnStage = 0;
@@ -343,7 +342,7 @@ void Engine::clearMappingsFor (int blockId, int param)
         if (m.blockId == blockId && m.param == param) m = {};
 }
 
-juce::String Engine::midiMessageName (int kind, int num)
+static juce::String midiName (int kind, int num)
 {
     switch (kind)
     {
@@ -359,7 +358,7 @@ juce::String Engine::describeMapping (int blockId, int param) const
 {
     for (auto& m : mappings)
         if (m.kind >= 0 && m.blockId == blockId && m.param == param)
-            return midiMessageName (m.kind, m.number) + (m.toggle ? " (toggle)" : "");
+            return midiName (m.kind, m.number) + (m.toggle ? " (toggle)" : "");
     return {};
 }
 
@@ -367,7 +366,7 @@ juce::String Engine::lastMidiText() const
 {
     const int k = lastKind.load();
     if (k < 0) return "none yet";
-    juce::String s = midiMessageName (k, lastNum.load());
+    juce::String s = midiName (k, lastNum.load());
     if (k != kindProgram) s << " = " << lastVal.load();
     s << "  (channel " << lastChannel.load() << ")";
     return s;
@@ -389,7 +388,7 @@ void Engine::pollMessageThread()
         {
             const int kind = learnedKind.load(), num = learnedNum.load();
             const int bid = learnBlock.load(), prm = learnParam.load();
-            bool switchTarget = prm < 0 || bid < 0;
+            bool switchTarget = prm < 0 || bid == -1 || bid == sceneMidiId || bid == setlistMidiId;
             if (! switchTarget)
                 if (auto b = findById (bid))
                     if (prm < (int) b->params.size()) switchTarget = b->params[(size_t) prm]->kind != Param::Kind::Float;
@@ -398,28 +397,11 @@ void Engine::pollMessageThread()
             nm.kind = kind; nm.number = num; nm.blockId = bid; nm.param = prm;
             // a momentary switch toggles on each press; a latching switch or a pedal/knob follows its value
             nm.toggle = (momentary && (switchTarget || kind == kindProgram || kind == kindNote)) ? 1 : 0;
-            const bool global = learnGlobal.load();
             {
                 const juce::SpinLock::ScopedLockType sl (lock);
-                if (global)
-                {
-                    for (auto& m : globalMappings) if (m.blockId == bid && m.param == prm) { nm.name = m.name; m = {}; }
-                    for (auto& m : globalMappings) if (m.kind < 0) { m = nm; break; }
-                }
-                else
-                {
-                    for (auto& m : mappings) if (m.blockId == bid && m.param == prm) { nm.name = m.name; m = {}; }
-                    for (auto& m : mappings) if (m.kind < 0) { m = nm; break; }
-                }
+                for (auto& m : mappings) if (m.blockId == bid && m.param == prm) m = {};
+                for (auto& m : mappings) if (m.kind < 0) { m = nm; break; }
             }
-            if (global) globalsChanged = true;
-            // the same switch already does something else? say so (both will happen)
-            juce::StringArray others;
-            for (auto& inf : listMappings())
-                if (inf.m.kind == kind && inf.m.number == num && ! (inf.global == global && inf.m.blockId == bid && inf.m.param == prm))
-                    others.add (inf.target);
-            if (! others.isEmpty())
-                learnNote = midiMessageName (kind, num) + " is also assigned to: " + others.joinIntoString (", ") + ". It will do both (clear one in Settings > Controller > MIDI map).";
             learnStage = 0;
             learnArmed = false;
         }
@@ -437,25 +419,6 @@ void Engine::applyMapping (const Mapping& m, int value, bool press, const Plan& 
     if (m.blockId == -1) { if (press) tapFromMidi = true; return; }
     if (m.blockId == sceneMidiId) { if (press) pendingScene = m.param; return; }
     if (m.blockId == setlistMidiId) { if (press) setlistStepFromMidi = m.param == 0 ? -1 : 1; return; }
-    if (m.blockId == panicMidiId) { if (press) panicFromMidi = true; return; }
-    if (m.blockId == presetSlotMidiId) { if (press) presetSlotFromMidi = m.param; return; }
-    if (m.blockId == bankMidiId) { if (press) bankStepFromMidi = m.param == 0 ? -1 : 1; return; }
-    if (m.blockId == stripMidiId) { if (press) stripFromMidi.fetch_or (1u << juce::jlimit (0, 31, m.param)); return; }
-    if (m.blockId == tunerMidiId) { if (press) tunerFromMidi = true; return; }
-    if (m.blockId == stompMidiId)
-    {
-        // stomp k = the k-th effect in the rig, left to right, top row first (amps and cabs don't count)
-        if (! press) return;
-        int k = 0;
-        for (int r = 0; r < rows; ++r)
-            for (int c = 0; c < cols; ++c)
-            {
-                Block* b = plan.cell[r][c];
-                if (b == nullptr || b->getType() == Block::Type::NamAmp || b->getType() == Block::Type::Cab) continue;
-                if (k++ == m.param) { b->enabled = ! b->enabled.load(); return; }
-            }
-        return;
-    }
     for (int r = 0; r < rows; ++r)
         for (int c = 0; c < cols; ++c)
         {
@@ -518,17 +481,9 @@ void Engine::handleMidi (juce::MidiBuffer& midi, const Plan& plan)
             continue;
         }
 
-        hitKind = kind; hitNum = num; ++hitCount;
         bool used = false;
         for (auto& m : mappings)
             if (m.kind == kind && m.number == num) { applyMapping (m, val, val >= 64, plan); used = true; }
-        for (auto& m : globalMappings)
-            if (m.kind == kind && m.number == num)
-            {
-                // toggle 2 = a latching switch: every message is a press
-                const bool press = m.toggle == 2 ? (kind != kindNote || val > 0) : val >= 64;
-                applyMapping (m, val, press, plan); used = true;
-            }
         if (kind == kindProgram && ! used) pendingProgram = num;   // unlearned program changes switch presets
     }
 }
@@ -896,7 +851,6 @@ juce::var Engine::toVar() const
             mo->setProperty ("lo", m.lo); mo->setProperty ("hi", m.hi); mo->setProperty ("curve", m.curve);
             mo->setProperty ("block", m.blockId);
             mo->setProperty ("param", m.param);
-            if (m.name.isNotEmpty()) mo->setProperty ("name", m.name);
             maps.add (juce::var (mo));
         }
     o->setProperty ("midi", maps);
@@ -994,7 +948,6 @@ void Engine::fromVar (const juce::var& v)
                 m.param = (int) mv.getProperty ("param", 0);
                 m.toggle = (int) mv.getProperty ("toggle", 0);
                 m.lo = (float) mv.getProperty ("lo", 0.0f); m.hi = (float) mv.getProperty ("hi", 1.0f); m.curve = (int) mv.getProperty ("curve", 0);
-                m.name = mv.getProperty ("name", "").toString();
                 mappings[(size_t) k++] = m;
             }
         }
@@ -1024,110 +977,4 @@ void Engine::fromVar (const juce::var& v)
         if (scenes[(size_t) currentScene.load()].valid) applyScene (scenes[(size_t) currentScene.load()]);
     }
     publish();
-}
-
-//==============================================================================
-// foot controller and MIDI map
-juce::var Engine::globalsToVar() const
-{
-    juce::Array<juce::var> maps;
-    for (auto& m : globalMappings)
-        if (m.kind >= 0)
-        {
-            auto* mo = new juce::DynamicObject();
-            mo->setProperty ("kind", m.kind); mo->setProperty ("number", m.number); mo->setProperty ("toggle", m.toggle);
-            mo->setProperty ("block", m.blockId); mo->setProperty ("param", m.param);
-            if (m.name.isNotEmpty()) mo->setProperty ("name", m.name);
-            maps.add (juce::var (mo));
-        }
-    return maps;
-}
-
-void Engine::globalsFromVar (const juce::var& v)
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    for (auto& m : globalMappings) m = {};
-    if (auto* arr = v.getArray())
-    {
-        size_t k = 0;
-        for (auto& mv : *arr)
-        {
-            if (k >= globalMappings.size()) break;
-            Mapping m;
-            m.kind = (int) mv.getProperty ("kind", -1); m.number = (int) mv.getProperty ("number", 0);
-            m.toggle = (int) mv.getProperty ("toggle", 1);
-            m.blockId = (int) mv.getProperty ("block", 0); m.param = (int) mv.getProperty ("param", 0);
-            m.name = mv.getProperty ("name", "").toString();
-            if (m.kind >= 0 && m.blockId < 0) globalMappings[k++] = m;
-        }
-    }
-}
-
-void Engine::setGlobals (const std::vector<Mapping>& list)
-{
-    {
-        const juce::SpinLock::ScopedLockType sl (lock);
-        for (auto& m : globalMappings) m = {};
-        for (size_t k = 0; k < list.size() && k < globalMappings.size(); ++k) globalMappings[k] = list[k];
-    }
-    globalsChanged = true;
-}
-
-juce::String Engine::describeTarget (const Mapping& m) const
-{
-    static const char* letters = "ABCDEFGH";
-    switch (m.blockId)
-    {
-        case -1: return "Tap tempo";
-        case sceneMidiId: return "Scene " + juce::String::charToString ((juce::juce_wchar) letters[juce::jlimit (0, 7, m.param)]);
-        case setlistMidiId: return m.param == 0 ? "Previous preset / song" : "Next preset / song";
-        case panicMidiId: return "Emergency bypass";
-        case presetSlotMidiId: return "Preset " + juce::String (m.param + 1) + " in the bank";
-        case bankMidiId: return m.param == 0 ? "Bank down" : "Bank up";
-        case stompMidiId: return "Stomp " + juce::String (m.param + 1);
-        case stripMidiId: return "Live strip button " + juce::String (m.param + 1);
-        case tunerMidiId: return "Tuner";
-        default: break;
-    }
-    if (auto b = findById (m.blockId))
-    {
-        if (m.param < 0) return b->getTitle() + " on/off";
-        if (m.param < (int) b->params.size()) return b->getTitle() + ": " + b->params[(size_t) m.param]->name;
-    }
-    return "(a block that isn't in this rig)";
-}
-
-std::vector<Engine::MapInfo> Engine::listMappings() const
-{
-    std::vector<MapInfo> out;
-    for (int g = 0; g < 2; ++g)
-    {
-        const bool global = g == 1;
-        const int count = global ? (int) globalMappings.size() : maxMappings;
-        for (int i = 0; i < count; ++i)
-        {
-            const auto& m = global ? globalMappings[(size_t) i] : mappings[(size_t) i];
-            if (m.kind < 0) continue;
-            out.push_back ({ global, i, m, midiMessageName (m.kind, m.number), describeTarget (m), false });
-        }
-    }
-    for (auto& a : out)
-        for (auto& b : out)
-            if (&a != &b && a.m.kind == b.m.kind && a.m.number == b.m.number) a.duplicate = true;
-    return out;
-}
-
-void Engine::renameMapping (bool global, int index, const juce::String& name)
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    auto& arr = global ? globalMappings[(size_t) juce::jlimit (0, 63, index)] : mappings[(size_t) juce::jlimit (0, maxMappings - 1, index)];
-    arr.name = name;
-    if (global) globalsChanged = true;
-}
-
-void Engine::removeMapping (bool global, int index)
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    if (global) { globalMappings[(size_t) juce::jlimit (0, 63, index)] = {}; globalsChanged = true; }
-    else mappings[(size_t) juce::jlimit (0, maxMappings - 1, index)] = {};
 }

@@ -47,46 +47,14 @@ private:
     int lastScene = -1;
 };
 
-// MIDI setup mode: a banner over the window; click any control, press a switch on your controller.
-class MidiSetupOverlay : public juce::Component, private juce::Timer
-{
-public:
-    explicit MidiSetupOverlay (NAMHomeProcessor& p);
-    void paint (juce::Graphics&) override;
-    void resized() override;
-    std::function<void()> onDone;
-    juce::Rectangle<int> banner;
-private:
-    void timerCallback() override { repaint(); }
-    NAMHomeProcessor& proc;
-    juce::TextButton done { "Done" };
-};
-
-// Settings > Controller: foot controller layouts, emergency bypass and the MIDI map.
-class ControllerPage : public juce::Component, private juce::Timer, private juce::ListBoxModel
+// Settings > Live: what the emergency button does.
+class ControllerPage : public juce::Component
 {
 public:
     explicit ControllerPage (NAMHomeProcessor& p);
-    ~ControllerPage() override;
     void resized() override;
-    void paint (juce::Graphics&) override;
-    std::function<void()> onMidiSetup;
-    void refresh();
 private:
-    void timerCallback() override;
-    int getNumRows() override { return (int) rows.size(); }
-    void paintListBoxItem (int row, juce::Graphics&, int w, int h, bool selected) override;
-    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
     NAMHomeProcessor& proc;
-    juce::Label layoutTitle, panicTitle, mapTitle, result;
-    juce::ComboBox layout, switches, sends, firstNum, panicBox, safeBox;
-    juce::ToggleButton latching { "Latching switches (each press sends on, then off)" };
-    juce::TextButton generate { "Set up my controller" }, learnPanic { "MIDI learn the emergency switch" },
-                     setupMode { "MIDI setup mode" }, rename { "Rename" }, remove { "Remove" };
-    juce::ListBox list;
-    struct Row { bool global; int index; juce::String name, message, target; bool duplicate; int kind, number; };
-    std::vector<Row> rows;
-    int lastHit = -1;
-    double hitAt = 0;
-    int hitKind = -1, hitNum = 0;
+    juce::Label panicTitle, help;
+    juce::ComboBox panicBox, safeBox;
 };

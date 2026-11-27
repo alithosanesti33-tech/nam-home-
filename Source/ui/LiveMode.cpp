@@ -203,13 +203,10 @@ void LiveView::paint (Graphics& g)
 
     // the performance strip and the emergency button
     const auto acts = proc.stripActions();
-    const auto maps = proc.engine.listMappings();
     for (int i = 0; i < NAMHomeProcessor::stripSlots; ++i)
     {
-        String midi;
-        for (auto& m : maps) if (m.global && m.m.blockId == Engine::stripMidiId && m.m.param == i) midi = m.message;
         const auto a = acts[i];
-        bigButton (g, stripR[i], NAMHomeProcessor::actionLabel (a), midi.isNotEmpty() ? midi : (a == "none" ? String ("right-click to set") : String()),
+        bigButton (g, stripR[i], NAMHomeProcessor::actionLabel (a), a == "none" ? String ("right-click to set") : String(),
                    proc.actionLit (a), a == "panic" ? theme::warn : theme::amber, pressed == 200 + i, 22.0f * hs);
     }
     {
@@ -233,16 +230,7 @@ void LiveView::mouseDown (const MouseEvent& e)
         }
     if (panicR.contains (pt))
     {
-        if (e.mods.isPopupMenu())
-        {
-            PopupMenu m;
-            m.addItem (1, "MIDI learn the emergency switch");
-            m.showMenuAsync (PopupMenu::Options(), [this] (int r)
-            {
-                if (r == 1) { proc.engine.armLearn (Engine::panicMidiId, 0, true); if (onMessage) onMessage ("Press the switch on your controller now...", false); }
-            });
-            return;
-        }
+        if (e.mods.isPopupMenu()) return;
         pressed = 300; proc.triggerPanic(); repaint(); return;
     }
     for (int i = 0; i < 8; ++i)
@@ -292,249 +280,41 @@ void LiveView::stripMenu (int slot)
         ++id;
     }
     m.addSubMenu ("Turn a block on/off", blocks);
-    m.addSeparator();
-    m.addItem (900, "MIDI learn this button");
-    m.addItem (901, "Clear its MIDI");
     m.showMenuAsync (PopupMenu::Options(), [this, slot, all] (int r)
     {
         if (r >= 1 && r <= all.size()) { proc.setStripAction (slot, all[r - 1]); repaint(); }
-        if (r == 900) { proc.engine.armLearn (Engine::stripMidiId, slot, true); if (onMessage) onMessage ("Press the switch on your controller now...", false); }
-        if (r == 901)
-            for (auto& mp : proc.engine.listMappings())
-                if (mp.global && mp.m.blockId == Engine::stripMidiId && mp.m.param == slot) proc.engine.removeMapping (true, mp.index);
     });
-}
-
-//==============================================================================
-MidiSetupOverlay::MidiSetupOverlay (NAMHomeProcessor& p) : proc (p)
-{
-    setInterceptsMouseClicks (false, true);
-    done.onClick = [this] { if (onDone) onDone(); };
-    done.setColour (TextButton::buttonColourId, Colour (0xff111111));
-    addAndMakeVisible (done);
-    startTimerHz (10);
-}
-
-void MidiSetupOverlay::resized()
-{
-    done.setBounds (banner.withTrimmedLeft (banner.getWidth() - 100).reduced (10, 8));
-}
-
-void MidiSetupOverlay::paint (Graphics& g)
-{
-    g.setColour (theme::amber);
-    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2.0f), 16.0f, 3.0f);
-    g.fillRoundedRectangle (banner.toFloat(), 12.0f);
-    g.setColour (Colour (0xff111111));
-    g.setFont (theme::font (14.5f, 2));
-    const auto txt = proc.engine.isLearning() ? String ("Now press the switch or move the pedal on your controller...")
-                                              : String ("MIDI setup: click any knob, switch or choice, then press a switch on your controller. Each block's on/off is the MIDI icon in its editor.");
-    g.drawFittedText (txt, banner.reduced (16, 4).withTrimmedRight (100), Justification::centredLeft, 2, 0.85f);
-
-    // show what's already assigned on the controls you can see
-    std::function<void (Component&)> walk = [&] (Component& c)
-    {
-        for (auto* ch : c.getChildren())
-        {
-            if (! ch->isShowing() || ch == this) continue;
-            Block* b = nullptr; int idx = -1;
-            if (auto* k = dynamic_cast<ParamKnob*> (ch)) { b = &k->getBlock(); idx = k->getIndex(); }
-            else if (auto* s = dynamic_cast<ParamSegments*> (ch)) { b = &s->getBlock(); idx = s->getIndex(); }
-            else if (auto* cb = dynamic_cast<ParamCombo*> (ch)) { b = &cb->getBlock(); idx = cb->getIndex(); }
-            else if (auto* sw = dynamic_cast<ParamSwitch*> (ch)) { b = &sw->getBlock(); idx = sw->getIndex(); }
-            if (b != nullptr)
-            {
-                const auto d = proc.engine.describeMapping (b->id, idx);
-                if (d.isNotEmpty())
-                {
-                    auto rr = getLocalArea (ch, ch->getLocalBounds());
-                    auto pill = rr.withHeight (18).withSizeKeepingCentre (jmin (rr.getWidth(), 110), 18).withY (rr.getY());
-                    g.setColour (theme::amber);
-                    g.fillRoundedRectangle (pill.toFloat(), 9.0f);
-                    g.setColour (Colour (0xff111111));
-                    g.setFont (theme::font (11.0f, 2));
-                    g.drawFittedText (d, pill, Justification::centred, 1, 0.7f);
-                }
-                continue;
-            }
-            walk (*ch);
-        }
-    };
-    if (auto* parent = getParentComponent()) walk (*parent);
 }
 
 //==============================================================================
 ControllerPage::ControllerPage (NAMHomeProcessor& p) : proc (p)
 {
-    auto title = [this] (Label& l, const String& t)
-    {
-        l.setText (t, dontSendNotification);
-        l.setFont (theme::font (15.0f, 2));
-        l.setColour (Label::textColourId, theme::text);
-        addAndMakeVisible (l);
-    };
-    title (layoutTitle, "Foot controller layout");
-    title (panicTitle, "Emergency bypass");
-    title (mapTitle, "MIDI map");
-
-    auto& st = proc.settings();
-    layout.addItemList ({ "Preset mode", "Scene mode", "Stomp mode", "Hybrid (scenes + stomps)" }, 1);
-    layout.setSelectedItemIndex (st.getIntValue ("fcLayout", 1), dontSendNotification);
-    for (int i = 2; i <= 12; ++i) switches.addItem (String (i) + " switches", i);
-    switches.setSelectedId (st.getIntValue ("fcSwitches", 4), dontSendNotification);
-    sends.addItemList ({ "They send Program Change", "They send CC", "They send Notes" }, 1);
-    sends.setSelectedItemIndex (st.getIntValue ("fcSends", 0), dontSendNotification);
-    for (int i = 0; i <= 127; ++i) firstNum.addItem ("starting at " + String (i), i + 1);
-    firstNum.setSelectedId (st.getIntValue ("fcFirst", 1) + 1, dontSendNotification);
-    latching.setToggleState (st.getBoolValue ("fcLatch", false), dontSendNotification);
-    for (auto* c : std::initializer_list<Component*> { &layout, &switches, &sends, &firstNum, &latching, &generate, &result,
-                                                       &panicBox, &safeBox, &learnPanic, &setupMode, &list, &rename, &remove })
-        addAndMakeVisible (c);
-    result.setFont (theme::font (12.5f));
-    result.setColour (Label::textColourId, theme::muted);
-    result.setText ("Pick how your switches should work and press the button: NAM Home makes the assignments for every preset.", dontSendNotification);
-    generate.onClick = [this]
-    {
-        auto& s = proc.settings();
-        s.setValue ("fcLayout", layout.getSelectedItemIndex());
-        s.setValue ("fcSwitches", switches.getSelectedId());
-        s.setValue ("fcSends", sends.getSelectedItemIndex());
-        s.setValue ("fcFirst", firstNum.getSelectedId() - 1);
-        s.setValue ("fcLatch", latching.getToggleState());
-        const auto msg = proc.generateLayout (layout.getSelectedItemIndex(), switches.getSelectedId(), sends.getSelectedItemIndex(),
-                                              firstNum.getSelectedId() - 1, latching.getToggleState());
-        result.setText (msg, dontSendNotification);
-        refresh();
-    };
-
+    panicTitle.setText ("Emergency button (live mode)", dontSendNotification);
+    panicTitle.setFont (theme::font (15.0f, 2));
+    panicTitle.setColour (Label::textColourId, theme::text);
+    help.setText ("What the red Emergency button in live mode does. Press it again to get your rig back.", dontSendNotification);
+    help.setFont (theme::font (12.5f));
+    help.setColour (Label::textColourId, theme::muted);
     panicBox.addItemList ({ "Dry guitar straight through", "Mute the output", "Load a safe preset" }, 1);
     panicBox.setSelectedItemIndex (proc.panicMode(), dontSendNotification);
     panicBox.onChange = [this] { proc.settings().setValue ("panicMode", panicBox.getSelectedItemIndex()); safeBox.setVisible (panicBox.getSelectedItemIndex() == 2); };
     safeBox.setTextWhenNothingSelected ("Choose the safe preset");
-    {
-        const auto names = proc.presets.list();
-        safeBox.addItemList (names, 1);
-        const int i = names.indexOf (proc.settings().getValue ("safePreset"));
-        if (i >= 0) safeBox.setSelectedItemIndex (i, dontSendNotification);
-    }
+    const auto names = proc.presets.list();
+    safeBox.addItemList (names, 1);
+    const int i = names.indexOf (proc.settings().getValue ("safePreset"));
+    if (i >= 0) safeBox.setSelectedItemIndex (i, dontSendNotification);
     safeBox.onChange = [this] { proc.settings().setValue ("safePreset", safeBox.getText()); };
     safeBox.setVisible (proc.panicMode() == 2);
-    learnPanic.onClick = [this] { proc.engine.armLearn (Engine::panicMidiId, 0, true); if (proc.onNotice) proc.onNotice ("Press the switch on your controller now..."); };
-
-    setupMode.onClick = [this] { if (onMidiSetup) onMidiSetup(); };
-    list.setModel (this);
-    list.setRowHeight (30);
-    list.setColour (ListBox::backgroundColourId, theme::panel);
-    rename.onClick = [this]
-    {
-        const int r = list.getSelectedRow();
-        if (r < 0 || r >= (int) rows.size()) return;
-        const auto row = rows[(size_t) r];
-        auto* aw = new AlertWindow ("Name this switch", row.message + "  ->  " + row.target, MessageBoxIconType::NoIcon);
-        aw->addTextEditor ("name", row.name);
-        aw->addButton ("Save", 1, KeyPress (KeyPress::returnKey));
-        aw->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
-        aw->enterModalState (true, ModalCallbackFunction::create ([this, aw, row] (int ok)
-        {
-            if (ok != 1) return;
-            proc.engine.renameMapping (row.global, row.index, aw->getTextEditorContents ("name").trim());
-            if (! row.global) proc.dirty = true;
-            refresh();
-        }), true);
-    };
-    remove.onClick = [this]
-    {
-        const int r = list.getSelectedRow();
-        if (r < 0 || r >= (int) rows.size()) return;
-        proc.engine.removeMapping (rows[(size_t) r].global, rows[(size_t) r].index);
-        if (! rows[(size_t) r].global) proc.dirty = true;
-        refresh();
-    };
-    refresh();
-    startTimerHz (10);
-}
-
-ControllerPage::~ControllerPage() { list.setModel (nullptr); }
-
-void ControllerPage::refresh()
-{
-    rows.clear();
-    for (auto& m : proc.engine.listMappings())
-        rows.push_back ({ m.global, m.index, m.m.name, m.message, m.target, m.duplicate, m.m.kind, m.m.number });
-    list.updateContent();
-    list.repaint();
-}
-
-void ControllerPage::timerCallback()
-{
-    const int hc = proc.engine.hitCount.load();
-    if (hc != lastHit)
-    {
-        lastHit = hc;
-        hitKind = proc.engine.hitKind.load(); hitNum = proc.engine.hitNum.load();
-        hitAt = Time::getMillisecondCounterHiRes();
-        list.repaint();
-    }
-    if ((int) proc.engine.listMappings().size() != (int) rows.size()) refresh();
-    if (hitAt > 0 && Time::getMillisecondCounterHiRes() - hitAt > 700) { hitAt = 0; list.repaint(); }
-}
-
-void ControllerPage::paintListBoxItem (int row, Graphics& g, int w, int h, bool selected)
-{
-    if (row < 0 || row >= (int) rows.size()) return;
-    const auto& r = rows[(size_t) row];
-    const bool hit = hitAt > 0 && r.kind == hitKind && r.number == hitNum;
-    g.setColour (hit ? theme::good.withAlpha (0.35f) : selected ? theme::hover : Colours::transparentBlack);
-    g.fillRect (0, 0, w, h);
-    g.setFont (theme::font (13.0f, 1));
-    g.setColour (theme::text);
-    g.drawText (r.name.isNotEmpty() ? r.name : r.target, 10, 0, w * 30 / 100, h, Justification::centredLeft);
-    g.setColour (r.duplicate ? theme::amber : theme::muted);
-    g.drawText (r.message + (r.duplicate ? "  (used twice)" : ""), w * 31 / 100, 0, w * 27 / 100, h, Justification::centredLeft);
-    g.setColour (theme::muted);
-    g.setFont (theme::font (12.5f));
-    g.drawText (r.target + (r.global ? "   (all presets)" : "   (this preset)"), w * 58 / 100, 0, w * 42 / 100 - 8, h, Justification::centredLeft);
-}
-
-void ControllerPage::listBoxItemDoubleClicked (int row, const MouseEvent&) { list.selectRow (row); rename.triggerClick(); }
-
-void ControllerPage::paint (Graphics& g)
-{
-    g.setColour (theme::faint);
-    g.setFont (theme::font (12.0f));
-    g.drawText ("A row lights up green when its switch arrives, so you can test each one. Double-click a row to name it.",
-                list.getX(), list.getBottom() + 4, list.getWidth(), 18, Justification::centredLeft);
+    for (auto* c : std::initializer_list<Component*> { &panicTitle, &help, &panicBox, &safeBox }) addAndMakeVisible (c);
 }
 
 void ControllerPage::resized()
 {
     auto r = getLocalBounds();
-    layoutTitle.setBounds (r.removeFromTop (24));
-    auto row = r.removeFromTop (30);
-    layout.setBounds (row.removeFromLeft (180)); row.removeFromLeft (8);
-    switches.setBounds (row.removeFromLeft (120)); row.removeFromLeft (8);
-    sends.setBounds (row.removeFromLeft (190)); row.removeFromLeft (8);
-    firstNum.setBounds (row.removeFromLeft (jmin (130, row.getWidth())));
+    panicTitle.setBounds (r.removeFromTop (26));
+    help.setBounds (r.removeFromTop (24));
     r.removeFromTop (6);
-    row = r.removeFromTop (30);
-    generate.setBounds (row.removeFromRight (190));
-    latching.setBounds (row);
-    result.setBounds (r.removeFromTop (38));
-    r.removeFromTop (8);
-    row = r.removeFromTop (26);
-    learnPanic.setBounds (row.removeFromRight (240));
-    panicTitle.setBounds (row);
-    row = r.removeFromTop (30);
+    auto row = r.removeFromTop (30);
     panicBox.setBounds (row.removeFromLeft (250)); row.removeFromLeft (8);
     safeBox.setBounds (row.removeFromLeft (240));
-    r.removeFromTop (14);
-    row = r.removeFromTop (28);
-    setupMode.setBounds (row.removeFromRight (170));
-    mapTitle.setBounds (row);
-    r.removeFromTop (4);
-    auto bottom = r.removeFromBottom (30);
-    remove.setBounds (bottom.removeFromRight (100)); bottom.removeFromRight (8);
-    rename.setBounds (bottom.removeFromRight (100));
-    r.removeFromBottom (26);
-    list.setBounds (r);
 }

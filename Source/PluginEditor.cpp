@@ -292,7 +292,6 @@ NAMHomeEditor::~NAMHomeEditor()
     proc.settings().setValue ("winW", getWidth());
     proc.settings().setValue ("winH", getHeight());
     proc.onNotice = nullptr; proc.onRigChanged = nullptr; proc.onToggleTuner = nullptr;
-    proc.midiSetupMode = false;
     proc.library.onChanged = nullptr; proc.library.onNotice = nullptr;
     if (proc.tone3000 != nullptr) { proc.tone3000->onMessage = nullptr; proc.tone3000->onDownloaded = nullptr; }
     setLookAndFeel (nullptr);
@@ -424,12 +423,6 @@ void NAMHomeEditor::resized()
     if (settingsSheet != nullptr) settingsSheet->setBounds (getLocalBounds());
     if (tunerPanel != nullptr) tunerPanel->setBounds (getLocalBounds());
     if (liveView != nullptr) liveView->setBounds (getLocalBounds());
-    if (midiOverlay != nullptr)
-    {
-        midiOverlay->setBounds (getLocalBounds().withTrimmedTop (topBar.getBottom() + 4));
-        midiOverlay->banner = Rectangle<int> (grid.getX(), grid.getY() - midiOverlay->getY(), grid.getWidth(), 44);
-        midiOverlay->resized();
-    }
 }
 
 void NAMHomeEditor::openTuner()
@@ -559,11 +552,6 @@ bool NAMHomeEditor::keyPressed (const KeyPress& k)
     {
         // live mode: no shortcuts (nothing gets deleted or edited by a stray key); Esc only closes the tuner
         if (k == KeyPress::escapeKey && tunerPanel != nullptr) { tunerPanel->setVisible (false); MessageManager::callAsync ([this] { tunerPanel = nullptr; resized(); }); }
-        return true;
-    }
-    if (k == KeyPress::escapeKey && midiOverlay != nullptr)
-    {
-        if (proc.engine.isLearning()) proc.engine.cancelLearn(); else endMidiSetup();
         return true;
     }
     if (k == KeyPress::escapeKey)
@@ -726,7 +714,6 @@ void NAMHomeEditor::openSettings()
     settingsSheet->onClose = [this] { MessageManager::callAsync ([this] { settingsSheet = nullptr; }); };
     settingsSheet->onDisplayChanged = [this] { applyDisplaySettings(); };
     settingsSheet->onToggleFullscreen = [this] { toggleFullscreen(); };
-    settingsSheet->onMidiSetup = [this] { MessageManager::callAsync ([this] { settingsSheet = nullptr; startMidiSetup(); }); };
     addAndMakeVisible (*settingsSheet);
     settingsSheet->setBounds (getLocalBounds());
 }
@@ -742,7 +729,6 @@ AudioDeviceManager* NAMHomeEditor::deviceManager() const
 
 void NAMHomeEditor::enterLive()
 {
-    if (midiOverlay != nullptr) endMidiSetup();
     settingsSheet = nullptr;
     closeDrawer();
     liveView = std::make_unique<LiveView> (proc, deviceManager());
@@ -760,26 +746,6 @@ void NAMHomeEditor::exitLive()
     refreshAll();
     resized();
     grabKeyboardFocus();
-}
-
-void NAMHomeEditor::startMidiSetup()
-{
-    proc.midiSetupMode = true;
-    midiOverlay = std::make_unique<MidiSetupOverlay> (proc);
-    midiOverlay->onDone = [this] { MessageManager::callAsync ([this] { endMidiSetup(); }); };
-    addAndMakeVisible (*midiOverlay);
-    toasts.toFront (false);
-    resized();
-    if (! drawerOpen) message ("MIDI setup mode: open a block, click a control, then press a switch. Esc or Done when you're finished.");
-}
-
-void NAMHomeEditor::endMidiSetup()
-{
-    proc.midiSetupMode = false;
-    proc.engine.cancelLearn();
-    midiOverlay = nullptr;
-    if (drawerOpen) drawer.sync();
-    repaint();
 }
 
 void NAMHomeEditor::showGigCheck()
