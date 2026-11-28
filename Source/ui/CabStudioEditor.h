@@ -1,6 +1,7 @@
 #pragma once
 #include "BlockEditors.h"
 #include "cab/CabStudio.h"
+#include <set>
 
 // Cab Studio's panel: your cab library on the left, the 3D cab and mics in the middle, what each
 // mic is really playing (measured or modelled) on the right, and the knobs along the bottom.
@@ -21,8 +22,13 @@ private:
     // library
     juce::TextEditor search;
     juce::ListBox list { "Cabs", this };
-    juce::TextButton importBtn { "Import..." }, inboxBtn { "Open Inbox" }, favBtn { "Favourites" };
-    std::vector<cab::Entry> shown;
+    juce::TextButton importBtn { "Import..." }, inboxBtn { "Open Inbox" };
+    juce::ComboBox showBox;   // all / favourites / sizes / tweed
+    // the list is grouped by pack; a pack folds open when you click it
+    struct Row { bool header = false; juce::String pack; int count = 0; bool open = false; cab::Entry e; };
+    std::vector<Row> shown;
+    std::set<juce::String> openPacks;
+    juce::String autoOpened;
     int libVersion = -1;
     void refreshList();
     int getNumRows() override { return (int) shown.size(); }
@@ -57,11 +63,13 @@ public:
     std::shared_ptr<Block> block() const { return cab; }
     std::function<void()> onClose;
     std::function<void (const juce::String&)> onError;
+    std::function<void()> onUseIr;   // back to a plain IR loader with the IR(s) you're on
 private:
     NAMHomeProcessor& proc;
     std::shared_ptr<Block> cab;
     std::unique_ptr<CabStudioEditor> editor;
-    juce::TextButton power { "On" }, done { "Done" }, offOld { "Turn the Cab block off" };
+    juce::TextButton power { "On" }, done { "Done" }, offOld { "Turn the other Cab block off" }, useIr { "Just the IR" };
+    IconButton info { IconButton::Icon::Info, "Show what each control does" };
     bool oldCabOn = false;
     int oldCount = 0;
 };

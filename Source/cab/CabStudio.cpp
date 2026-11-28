@@ -10,9 +10,9 @@ constexpr double irRate = cab::Library::rate;    // every IR is built at 48 kHz 
 constexpr int irLength = 8192;                   // 170 ms: longer than any close-mic cab IR needs
 constexpr int onsetAt = 24;                      // measured IRs are lined up with their first sound here
 constexpr double inchesPerSecond = 13504.0;      // speed of sound
-const juce::StringArray micChoices { "SM57", "MD421", "R-121", "U87" };
+const juce::StringArray micChoices { "SM57", "MD421", "R-121", "U87", "As recorded" };   // "As recorded": whatever mic the pack used, untouched
 
-cab::Mic micOf (int choice) { return (cab::Mic) juce::jlimit (0, 3, choice); }
+cab::Mic micOf (int choice) { return choice >= 4 ? cab::Mic::Other : (cab::Mic) juce::jlimit (0, 3, choice); }
 
 // how each mic colours the sound, roughly (used only when a pack has no IR from the mic you pick:
 // the IR of another mic is turned into yours by removing its colour and adding yours)
@@ -34,6 +34,50 @@ void filter (std::vector<float>& x, Biquad::Type t, float f, float q, float db)
     if (std::abs (db) < 0.01f && (t == Biquad::Type::Peak || t == Biquad::Type::LowShelf || t == Biquad::Type::HighShelf)) return;
     Biquad b; b.set (t, (float) irRate, f, q, db); b.reset();
     for (auto& s : x) s = b.process (s);
+}
+
+// the part of an IR that decides whether two mics cancel (below ~1.5 kHz)
+std::vector<float> lowpassed (const std::vector<float>& x, int len)
+{
+    std::vector<float> y (x.begin(), x.begin() + std::min ((int) x.size(), len));
+    filter (y, Biquad::Type::LowPass, 1500, 0.707f, 0);
+    return y;
+}
+
+// correlation of a with b delayed by lag (positive lag: b later)
+double corrAt (const std::vector<float>& a, const std::vector<float>& b, double lag, int len)
+{
+    double s = 0, ea = 0, eb = 0;
+    const int li = (int) std::floor (lag); const double fr = lag - li;
+    for (int i = 0; i < len && i < (int) a.size(); ++i)
+    {
+        const int j = i - li;
+        auto at = [&b] (int k) { return k >= 0 && k < (int) b.size() ? (double) b[(size_t) k] : 0.0; };
+        const double bv = at (j) * (1 - fr) + at (j - 1) * fr;
+        s += a[(size_t) i] * bv; ea += (double) a[(size_t) i] * a[(size_t) i]; eb += bv * bv;
+    }
+    return ea > 0 && eb > 0 ? s / std::sqrt (ea * eb) : 0.0;
+}
+
+// the lag (within +-range samples, to a fraction of a sample) that lines b up with a; sign tells
+// whether b is upside down
+double bestLag (const std::vector<float>& a, const std::vector<float>& b, int range, int len, bool allowFlip, double& corr)
+{
+    int best = 0; double bc = -2;
+    for (int lag = -range; lag <= range; ++lag)
+    {
+        const double c = corrAt (a, b, lag, len);
+        const double score = allowFlip ? std::abs (c) : c;
+        if (score > bc) { bc = score; best = lag; }
+    }
+    // refine between samples (parabola through the three best points)
+    const double c0 = corrAt (a, b, best - 1, len), c1 = corrAt (a, b, best, len), c2 = corrAt (a, b, best + 1, len);
+    const double sgn = allowFlip && c1 < 0 ? -1.0 : 1.0;
+    const double den = sgn * (c0 - 2 * c1 + c2);
+    double frac = den < -1e-12 ? 0.5 * sgn * (c0 - c2) / den : 0.0;
+    frac = juce::jlimit (-0.5, 0.5, frac);
+    corr = corrAt (a, b, best + frac, len);
+    return best + frac;
 }
 
 int onset (const std::vector<float>& x)
@@ -116,8 +160,8 @@ CabStudioBlock::CabStudioBlock() : Block (Type::CabStudio)
     autoAlign = &addToggle ("autoAlign", "Auto phase align", true);
     for (auto* p : { listen, blend, alignB, autoAlign }) p->visible = full;
     currentGroup = "Cabinet";
-    lowCut    = &addFloat ("lowCut", "Low cut", 20, 300, 60, "Hz", 80, 1);
-    highCut   = &addFloat ("highCut", "High cut", 3000, 20000, 12000, "Hz", 8000, 10);
+    lowCut    = &addFloat ("lowCut", "Low cut", 20, 300, 20, "Hz", 80, 1);
+    highCut   = &addFloat ("highCut", "High cut", 3000, 20000, 20000, "Hz", 8000, 10);
     reso      = &addFloat ("reso", "Resonance", -6, 6, 0, "dB", -1, 0.1f);
     character = &addFloat ("character", "Character", -1, 1, 0, "", -1, 0.01f);
     room      = &addFloat ("room", "Room", 0, 1, 0, "", -1, 0.01f);
@@ -141,6 +185,44 @@ void CabStudioBlock::setSpeakerType (const juce::String& s) { std::lock_guard<st
 juce::String CabStudioBlock::getSpeakerType() const { std::lock_guard<std::mutex> l (lock); return speakerType; }
 CabStudioBlock::Info CabStudioBlock::info() const { std::lock_guard<std::mutex> l (lock); return last; }
 
+bool CabStudioBlock::seedFrom (const juce::File& ir1, const juce::File& ir2, float level1, float level2)
+{
+    cab::Entry e; cab::Ir a;
+    if (! cab::Library::get().locate (ir1, e, a)) return false;
+    setCab (e.id);
+    setSpeakerType (a.speakerType);
+    auto place = [this] (int k, const cab::Ir& ir, float level)
+    {
+        auto& m = mp[(size_t) k];
+        m.on->set (1);
+        m.model->set (4);   // as recorded: exactly the IR
+        m.pos->set (knownR (ir)); m.dist->set (knownDist (ir)); m.angle->set (knownAngle (ir));
+        m.level->set (level);
+        m.pol->set (0);
+    };
+    place (0, a, level1);
+    mp[1].on->set (0);
+    if (ir2.existsAsFile())
+    {
+        cab::Entry e2; cab::Ir b;
+        if (cab::Library::get().locate (ir2, e2, b) && e2.id == e.id) place (1, b, level2);
+    }
+    autoAlign->set (0);   // keep the two IRs' own timing, as the IR loader played them
+    {
+        std::lock_guard<std::mutex> l (lock);
+        fromIr[0] = ir1.getFullPathName(); fromIr[1] = ir2.existsAsFile() ? ir2.getFullPathName() : juce::String();
+    }
+    return true;
+}
+
+juce::File CabStudioBlock::originalIr (int k) const
+{
+    std::lock_guard<std::mutex> l (lock);
+    if (fromIr[k & 1].isNotEmpty()) return juce::File (fromIr[k & 1]);
+    // not started from an IR: the measured IR the mic is nearest to
+    return last.file[k & 1].isNotEmpty() ? cab::Library::get().fileFor (last.file[k & 1]) : juce::File();
+}
+
 juce::String CabStudioBlock::getSubtitle() const
 {
     if (mode->getInt() == 1) return "Enhance only";
@@ -159,6 +241,11 @@ juce::var CabStudioBlock::saveExtra() const
     o->setProperty ("speaker", getSpeakerType());
     o->setProperty ("clockA", (double) clock[0].load());
     o->setProperty ("clockB", (double) clock[1].load());
+    {
+        std::lock_guard<std::mutex> l (lock);
+        o->setProperty ("fromIr1", fromIr[0]);
+        o->setProperty ("fromIr2", fromIr[1]);
+    }
     return juce::var (o);
 }
 
@@ -168,6 +255,9 @@ void CabStudioBlock::loadExtra (const juce::var& v)
     setSpeakerType (v.getProperty ("speaker", {}).toString());
     clock[0] = (float) (double) v.getProperty ("clockA", 300.0);
     clock[1] = (float) (double) v.getProperty ("clockB", 60.0);
+    std::lock_guard<std::mutex> l (lock);
+    fromIr[0] = v.getProperty ("fromIr1", {}).toString();
+    fromIr[1] = v.getProperty ("fromIr2", {}).toString();
 }
 
 std::vector<Block::StartingPoint> CabStudioBlock::startingPoints() const
@@ -229,7 +319,8 @@ void CabStudioBlock::build()
         if (pool.empty()) continue;
         // prefer IRs of this mic, and of this speaker when the pack says which speaker each IR is
         auto narrow = [&pool] (auto pred) { std::vector<const cab::Ir*> o; for (auto* i : pool) if (pred (*i)) o.push_back (i); if (! o.empty()) pool = o; return ! o.empty(); };
-        const bool sameMic = narrow ([mic] (const cab::Ir& i) { return i.mic == mic; });
+        const bool asRecorded = m.model->getInt() >= 4;
+        const bool sameMic = asRecorded || narrow ([mic] (const cab::Ir& i) { return i.mic == mic; });
         const bool sameSpeaker = narrow ([spk] (const cab::Ir& i) { return i.speaker == spk; });
         juce::ignoreUnused (sameSpeaker);
 
@@ -248,21 +339,41 @@ void CabStudioBlock::build()
         std::vector<float> acc ((size_t) irLength, 0.0f);
         float wsum = 0, avgR = 0, avgDist = 0, avgAngle = 0;
         int used = 0;
+        std::vector<float> refLow;
         for (auto& nb : near)
         {
             auto a = cab::Library::get().audio (nb.ir->file);
             if (a == nullptr || a->empty()) continue;
             const float w = 1.0f / ((nb.d + 0.05f) * (nb.d + 0.05f));
             const int on = onset (*a);
+            std::vector<float> x ((size_t) irLength, 0.0f);
             double energy = 0;
-            for (auto s : *a) energy += (double) s * s;
-            const float g = energy > 0 ? (float) (1.0 / std::sqrt (energy)) : 0.0f;   // equal loudness before blending
             for (int i = 0; i < irLength - onsetAt; ++i)
             {
                 const int src = on + i;
                 if (src >= (int) a->size()) break;
-                acc[(size_t) (onsetAt + i)] += w * g * (*a)[(size_t) src];
+                x[(size_t) (onsetAt + i)] = (*a)[(size_t) src];
+                energy += (double) x[(size_t) (onsetAt + i)] * x[(size_t) (onsetAt + i)];
             }
+            const float g = energy > 0 ? (float) (1.0 / std::sqrt (energy)) : 0.0f;   // equal loudness before blending
+            // IRs from nearby spots are lined up with the first one (and turned the same way up) before
+            // they're mixed, so blending doesn't cancel the lows
+            double lag = 0; float sign = 1;
+            if (used == 0) refLow = lowpassed (x, 2048);
+            else
+            {
+                double c = 0;
+                lag = bestLag (refLow, lowpassed (x, 2048), 48, 2048, true, c);
+                if (c < 0) sign = -1;
+            }
+            const int li = (int) std::floor (lag); const float fr = (float) (lag - li);
+            for (int i = 0; i < irLength; ++i)
+            {
+                const int j = i - li;
+                const float v0 = j >= 0 && j < irLength ? x[(size_t) j] : 0.0f, v1 = j - 1 >= 0 && j - 1 < irLength ? x[(size_t) (j - 1)] : 0.0f;
+                acc[(size_t) i] += sign * w * g * (v0 * (1 - fr) + v1 * fr);
+            }
+            if (used == 0) { inf.file[k] = nb.ir->file; }
             wsum += w; avgR += w * knownR (*nb.ir); avgDist += w * knownDist (*nb.ir); avgAngle += w * knownAngle (*nb.ir);
             ++used;
         }
@@ -311,7 +422,7 @@ void CabStudioBlock::build()
         // time of flight from the speaker to the mic
         const double delay = dist / inchesPerSecond * irRate;
         std::vector<float> shifted ((size_t) irLength, 0.0f);
-        const int di = (int) delay; const float fr = (float) (delay - di);
+        const int di = (int) std::lround (delay); const float fr = 0.0f;   // whole samples: a fractional delay would dull the top end
         for (int i = 0; i < irLength; ++i)
         {
             const int j = i - di;
@@ -328,47 +439,43 @@ void CabStudioBlock::build()
         else inf.source[k] = (used == 1 ? "From " + describe (*near[0].ir) : "Blended from " + juce::String (used) + " measured") + ", modelled " + modelled.joinIntoString (", ");
     }
 
-    // line B up with A (or leave the natural time difference), plus your own B time
+    // line B up with A (or leave the natural time difference), plus your own B time. Auto align
+    // lines up the low end (where two mics cancel) to a fraction of a sample, and turns B the right
+    // way up if it came in upside down
     const bool both = ! built[0].empty() && ! built[1].empty();
-    int shiftB = (int) std::lround (alignB->get() * 0.001 * irRate);
+    double shiftB = alignB->get() * 0.001 * irRate;
+    float signB = 1;
     if (both)
     {
-        auto corrAt = [&] (int lag)   // correlation of A with B moved by lag samples
-        {
-            double s = 0, ea = 0, eb = 0;
-            for (int i = 0; i < 2048; ++i)
-            {
-                const int j = i - lag;
-                const float a = built[0][(size_t) i], b = j >= 0 && j < irLength ? built[1][(size_t) j] : 0.0f;
-                s += (double) a * b; ea += (double) a * a; eb += (double) b * b;
-            }
-            return ea > 0 && eb > 0 ? s / std::sqrt (ea * eb) : 0.0;
-        };
-        int best = 0;
+        const auto la = lowpassed (built[0], 4096), lb = lowpassed (built[1], 4096);
+        double c = 0;
+        double best = 0;
         if (autoAlign->on())
         {
-            double bc = -2;
-            const int range = (int) (0.002 * irRate);
-            for (int lag = -range; lag <= range; ++lag) { const double c = corrAt (lag); if (c > bc) { bc = c; best = lag; } }
+            best = bestLag (la, lb, (int) (0.002 * irRate), 4096, true, c);
+            if (c < 0) { signB = -1; inf.flippedB = true; }
         }
         shiftB += best;
-        inf.alignSamples = shiftB;
-        inf.phaseMatch = (float) juce::jlimit (0.0, 1.0, 0.5 + 0.5 * corrAt (shiftB));
+        inf.alignSamples = (int) std::lround (shiftB);
+        auto lbs = lb; for (auto& v : lbs) v *= signB;
+        inf.phaseMatch = (float) juce::jlimit (0.0, 1.0, corrAt (la, lbs, shiftB, 4096));
     }
     // apply B's move; take off the delay both share so Cab Studio adds as little latency as it can
-    int startA = firstSound[0], startB = firstSound[1] + shiftB;
-    int common = both ? std::min (startA, startB) : (! built[0].empty() ? startA : startB);
-    common = std::max (0, common - 8);
-    auto finish = [&] (int k, int move)
+    const double startA = firstSound[0], startB = firstSound[1] + shiftB;
+    double common = both ? std::min (startA, startB) : (! built[0].empty() ? startA : startB);
+    common = std::max (0.0, std::floor (common) - 8);
+    auto finish = [&] (int k, double move, float sign)
     {
         if (built[k].empty()) { hasIr[k] = false; return; }
         juce::AudioBuffer<float> b (1, irLength);
         b.clear();
         double energy = 0;
+        const double off = common - move;
+        const int oi = (int) std::floor (off); const float fr = (float) (off - oi);
+        auto at = [&] (int j) { return j >= 0 && j < irLength ? built[k][(size_t) j] : 0.0f; };
         for (int i = 0; i < irLength; ++i)
         {
-            const int j = i + common - move;
-            float s = j >= 0 && j < irLength ? built[k][(size_t) j] : 0.0f;
+            float s = sign * (at (i + oi) * (1 - fr) + at (i + oi + 1) * fr);
             if (i > irLength - 256) s *= (float) (irLength - i) / 256.0f;   // fade the end
             b.setSample (0, i, s);
             energy += (double) s * s;
@@ -377,8 +484,8 @@ void CabStudioBlock::build()
         conv[k].loadImpulseResponse (std::move (b), irRate, juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
         hasIr[k] = true;
     };
-    finish (0, 0);
-    finish (1, shiftB);
+    finish (0, 0.0, 1.0f);
+    finish (1, shiftB, signB);
 
     std::lock_guard<std::mutex> l (lock);
     last = inf;
@@ -461,8 +568,8 @@ void CabStudioBlock::process (float* L, float* R, int n)
         if (ls == OnlyA) { wA = a ? 1.0f : 0.0f; wB = 0; }
         if (ls == OnlyB) { wB = b ? 1.0f : 0.0f; wA = 0; }
         if (a && b && ls == Both) { const float norm = 1.0f / std::sqrt (wA * wA + wB * wB); wA *= norm; wB *= norm; }   // about the same loudness across the blend
-        gainA.setTarget (wA * dbToGain (mp[0].level->get()) * dbToGain (-0.35f * mp[0].dist->get()));
-        gainB.setTarget (wB * dbToGain (mp[1].level->get()) * dbToGain (-0.35f * mp[1].dist->get()));
+        gainA.setTarget (wA * dbToGain (mp[0].level->get()) * dbToGain (-0.35f * (mp[0].dist->get() - 1.0f)));
+        gainB.setTarget (wB * dbToGain (mp[1].level->get()) * dbToGain (-0.35f * (mp[1].dist->get() - 1.0f)));
         const float* oa = micOut.getReadPointer (0);
         const float* ob = micOut.getReadPointer (1);
         for (int i = 0; i < n; ++i) { const float s = oa[i] * gainA.next() + ob[i] * gainB.next(); L[i] = s; R[i] = s; }

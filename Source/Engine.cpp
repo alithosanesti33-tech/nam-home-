@@ -1006,6 +1006,15 @@ void Engine::fromVar (const juce::var& v)
                 idMap[(int) cv.getProperty ("id", 0)] = b->id;
                 cabStudio = b;
             }
+        // Cab Studio used to sit off the grid: put it on the grid, right after the amp, when there's room
+        if (cabStudio != nullptr)
+            for (int r = 0; r < rows && cabStudio != nullptr; ++r)
+                for (int c = 0; c + 1 < cols && cabStudio != nullptr; ++c)
+                    if (cells[(size_t) r][(size_t) c] != nullptr && cells[(size_t) r][(size_t) c]->getType() == Block::Type::NamAmp)
+                    {
+                        if (cells[(size_t) r][(size_t) c + 1] == nullptr) { cells[(size_t) r][(size_t) c + 1] = cabStudio; cabStudio = nullptr; }
+                        r = rows; break;
+                    }
     }
 
     if (auto* arr = v.getProperty ("merges", {}).getArray())

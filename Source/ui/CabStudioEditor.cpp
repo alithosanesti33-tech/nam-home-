@@ -91,11 +91,12 @@ CabStudioEditor::CabStudioEditor (NAMHomeProcessor& p, std::shared_ptr<Block> b)
     search.setTextToShowWhenEmpty ("Search cabs", theme::faint);
     search.onTextChange = [this] { refreshList(); };
     addAndMakeVisible (search);
-    list.setRowHeight (40);
+    list.setRowHeight (34);
     list.setColour (ListBox::backgroundColourId, theme::card);
     addAndMakeVisible (list);
-    favBtn.setClickingTogglesState (true);
-    favBtn.onClick = [this] { refreshList(); };
+    showBox.addItemList ({ "All cabs", String::fromUTF8 ("\xe2\x98\x85 Favourites"), "1x8 - 1x15", "2x10 - 2x12", "4x10 - 4x12", "Tweed", "Open back", "Closed back" }, 1);
+    showBox.setSelectedId (1, dontSendNotification);
+    showBox.onChange = [this] { refreshList(); };
     importBtn.onClick = [this]
     {
         chooser = std::make_unique<FileChooser> ("Import IRs (zips, folders or WAVs)", File::getSpecialLocation (File::userHomeDirectory).getChildFile ("Downloads"), "*.zip;*.wav;*.aif;*.aiff");
@@ -117,7 +118,8 @@ CabStudioEditor::CabStudioEditor (NAMHomeProcessor& p, std::shared_ptr<Block> b)
         auto in = cab::Library::get().inbox();
         if (cab::Library::get().root().getParentDirectory().exists()) { in.createDirectory(); in.revealToUser(); }
     };
-    for (auto* bt : { &importBtn, &inboxBtn, &favBtn }) addAndMakeVisible (*bt);
+    for (auto* bt : { &importBtn, &inboxBtn }) addAndMakeVisible (*bt);
+    addAndMakeVisible (showBox);
 
     speakerBox.setTextWhenNothingSelected ("Speaker");
     speakerBox.onChange = [this]
@@ -151,15 +153,45 @@ void CabStudioEditor::refreshList()
     auto& lib = cab::Library::get();
     libVersion = lib.version();
     const auto q = search.getText().trim().toLowerCase();
-    shown.clear();
+    const int show = showBox.getSelectedId();
+    std::map<String, std::vector<cab::Entry>> packs;
+    std::vector<String> order;
+    String currentPack;
     for (auto& e : lib.entries())
     {
-        if (favBtn.getToggleState() && ! e.favourite) continue;
+        const int n = e.speakers > 0 ? e.speakers : 1;
+        if (show == 2 && ! e.favourite) continue;
+        if (show == 3 && n != 1) continue;
+        if (show == 4 && n != 2) continue;
+        if (show == 5 && n != 4) continue;
+        if (show == 6 && ! e.tweed) continue;
+        if (show == 7 && e.back != 2) continue;
+        if (show == 8 && e.back != 1) continue;
         const auto hay = (e.name + " " + e.pack + " " + e.config() + " " + e.speakerTypes().joinIntoString (" ") + (e.tweed ? " tweed" : "")).toLowerCase();
         if (q.isNotEmpty() && ! hay.contains (q)) continue;
-        shown.push_back (e);
+        if (packs.find (e.pack) == packs.end()) order.push_back (e.pack);
+        packs[e.pack].push_back (e);
+        if (e.id == cs.getCab()) currentPack = e.pack;
     }
-    std::stable_sort (shown.begin(), shown.end(), [] (const cab::Entry& a, const cab::Entry& b) { return a.favourite > b.favourite; });
+    // the pack you're in opens by itself (once, so you can still fold it)
+    if (currentPack.isNotEmpty() && autoOpened != cs.getCab()) { openPacks.insert (currentPack); autoOpened = cs.getCab(); }
+    std::sort (order.begin(), order.end(), [&packs] (const String& a, const String& b)
+    {
+        const bool fa = std::any_of (packs[a].begin(), packs[a].end(), [] (auto& e) { return e.favourite; });
+        const bool fb = std::any_of (packs[b].begin(), packs[b].end(), [] (auto& e) { return e.favourite; });
+        if (fa != fb) return fa;
+        return a.compareNatural (b) < 0;
+    });
+    shown.clear();
+    for (auto& pk : order)
+    {
+        auto& cabs = packs[pk];
+        if (cabs.size() == 1) { Row r; r.e = cabs[0]; shown.push_back (r); continue; }   // a pack of one cab is just the cab
+        Row h; h.header = true; h.pack = pk; h.count = (int) cabs.size();
+        h.open = q.isNotEmpty() || openPacks.count (pk) > 0;
+        shown.push_back (h);
+        if (h.open) for (auto& e : cabs) { Row r; r.e = e; r.pack = pk; shown.push_back (r); }
+    }
     list.updateContent();
     list.repaint();
     // speakers of the current cab
@@ -181,26 +213,46 @@ void CabStudioEditor::refreshList()
 void CabStudioEditor::paintListBoxItem (int row, Graphics& g, int w, int h, bool)
 {
     if (row < 0 || row >= (int) shown.size()) return;
-    const auto& e = shown[(size_t) row];
+    const auto& rw = shown[(size_t) row];
+    if (rw.header)
+    {
+        g.setColour (theme::muted);
+        g.setFont (theme::font (11.0f, 2));
+        g.drawText (String::fromUTF8 (rw.open ? "\xe2\x96\xbe  " : "\xe2\x96\xb8  ") + rw.pack.toUpperCase(), 6, 0, w - 44, h, Justification::centredLeft, true);
+        g.setColour (theme::faint);
+        g.drawText (String (rw.count), w - 40, 0, 32, h, Justification::centredRight);
+        return;
+    }
+    const auto& e = rw.e;
+    const int indent = rw.pack.isNotEmpty() ? 12 : 0;
     const bool cur = e.id == cs.getCab();
-    if (cur) { g.setColour (cs.getColour().withAlpha (0.18f)); g.fillRoundedRectangle (2.0f, 2.0f, (float) w - 4, (float) h - 4, 6.0f); }
+    if (cur) { g.setColour (cs.getColour().withAlpha (0.18f)); g.fillRoundedRectangle ((float) indent + 2.0f, 2.0f, (float) (w - indent) - 4, (float) h - 4, 6.0f); }
     // a little swatch: tweed, or black tolex
     g.setColour (e.tweed ? Colour (0xffc9a868) : Colour (0xff2a2a2e));
-    g.fillRoundedRectangle (8.0f, 9.0f, 22.0f, 22.0f, 4.0f);
+    g.fillRoundedRectangle ((float) indent + 8.0f, (float) h / 2 - 9, 18.0f, 18.0f, 4.0f);
     g.setColour (Colour (0xff111113));
-    g.fillEllipse (12.0f, 13.0f, 14.0f, 14.0f);
+    g.fillEllipse ((float) indent + 11.0f, (float) h / 2 - 6, 12.0f, 12.0f);
+    const int x = indent + 34;
     g.setColour (cur ? theme::text : theme::text.withAlpha (0.9f));
-    g.setFont (theme::font (13.0f, 1));
-    g.drawText ((e.favourite ? String::fromUTF8 ("\xe2\x98\x85 ") : String()) + e.name, 38, 4, w - 44, 18, Justification::centredLeft, true);
+    g.setFont (theme::font (12.5f, 1));
+    g.drawText ((e.favourite ? String::fromUTF8 ("\xe2\x98\x85 ") : String()) + e.name, x, 3, w - x - 4, 16, Justification::centredLeft, true);
     g.setColour (theme::faint);
-    g.setFont (theme::font (11.0f));
-    g.drawText (e.config() + (e.back == 2 ? " open" : e.back == 1 ? " closed" : "") + String::fromUTF8 (" \xc2\xb7 ") + e.pack, 38, 21, w - 44, 15, Justification::centredLeft, true);
+    g.setFont (theme::font (10.5f));
+    int close = 0; for (auto& i : e.irs) if (! i.room) ++close;
+    g.drawText (e.config() + (e.back == 2 ? " open" : e.back == 1 ? " closed" : "") + String::fromUTF8 (" \xc2\xb7 ") + String (close) + " IRs", x, 18, w - x - 4, 13, Justification::centredLeft, true);
 }
 
 void CabStudioEditor::listBoxItemClicked (int row, const MouseEvent& m)
 {
     if (row < 0 || row >= (int) shown.size()) return;
-    const auto e = shown[(size_t) row];
+    if (shown[(size_t) row].header)
+    {
+        const auto pk = shown[(size_t) row].pack;
+        if (openPacks.count (pk) > 0) openPacks.erase (pk); else openPacks.insert (pk);
+        refreshList();
+        return;
+    }
+    const auto e = shown[(size_t) row].e;
     if (m.mods.isPopupMenu())
     {
         PopupMenu menu;
@@ -335,13 +387,14 @@ Rectangle<int> CabStudioEditor::layoutSpecial (Rectangle<int> r)
     auto lib = libArea;
     search.setBounds (lib.removeFromTop (28));
     lib.removeFromTop (6);
+    showBox.setBounds (lib.removeFromTop (26));
+    lib.removeFromTop (6);
     auto btns = lib.removeFromBottom (28);
     lib.removeFromBottom (6);
     list.setBounds (lib);
-    const int bw = (btns.getWidth() - 8) / 3;
+    const int bw = (btns.getWidth() - 4) / 2;
     importBtn.setBounds (btns.removeFromLeft (bw)); btns.removeFromLeft (4);
-    inboxBtn.setBounds (btns.removeFromLeft (bw)); btns.removeFromLeft (4);
-    favBtn.setBounds (btns);
+    inboxBtn.setBounds (btns);
 
     auto side = sideArea;
     if (modeBar != nullptr) { modeBar->setBounds (side.removeFromTop (modeBar->preferredHeight (side.getWidth()))); side.removeFromTop (8); }
@@ -435,6 +488,18 @@ CabStudioPage::CabStudioPage (NAMHomeProcessor& p, std::shared_ptr<Block> rigCab
     power.setToggleState (cab->enabled.load(), dontSendNotification);
     power.onClick = [this] { cab->enabled = power.getToggleState(); power.setButtonText (power.getToggleState() ? "On" : "Off"); proc.dirty = true; repaint(); };
     done.onClick = [this] { if (onClose) onClose(); };
+    useIr.setTooltip ("Go back to a plain IR loader with the IR Mic A is on (and Mic B's, if it's on)");
+    useIr.onClick = [this] { if (onUseIr) onUseIr(); };
+    info.lit = BlockEditor::infoMode();
+    info.onClick = [this]
+    {
+        auto& on = BlockEditor::infoMode();
+        on = ! on;
+        info.lit = on; info.repaint();
+        proc.settings().setValue ("infoMode", on);
+        editor->resized();
+    };
+    for (auto* b : std::initializer_list<juce::Component*> { &useIr, &info }) addAndMakeVisible (b);
     offOld.onClick = [this]
     {
         // the grid's own Cab blocks would make it two cabs
@@ -473,6 +538,10 @@ void CabStudioPage::resized()
     done.setBounds (head.removeFromRight (80));
     head.removeFromRight (8);
     power.setBounds (head.removeFromRight (60));
+    head.removeFromRight (8);
+    useIr.setBounds (head.removeFromRight (100));
+    head.removeFromRight (8);
+    info.setBounds (head.removeFromRight (32));
     head.removeFromRight (12);
     if (offOld.isVisible()) offOld.setBounds (head.removeFromRight (190));
     editor->setBounds (r);
@@ -487,10 +556,10 @@ void CabStudioPage::paint (Graphics& g)
     g.drawText ("CAB STUDIO", head.removeFromLeft (140), Justification::centredLeft);
     g.setColour (theme::faint);
     g.setFont (theme::font (12.0f));
-    String note = cab->enabled.load() ? "Plays right after your amp" : "Off: your rig plays without it";
-    if (oldCabOn) note = "Your rig also has a Cab block on, so you'd hear two cabs";
+    String note = cab->enabled.load() ? "Editing the cab block on your grid" : "Off: the cab block is bypassed";
+    if (oldCabOn) note = "Your rig also has another Cab block on, so you'd hear two cabs";
     g.setColour (oldCabOn ? theme::amber : theme::faint);
-    g.drawText (note, head.withTrimmedRight (360), Justification::centredLeft);
+    g.drawText (note, head.withTrimmedLeft (150).withTrimmedRight (520), Justification::centredLeft);
     g.setColour (theme::line);
     g.drawHorizontalLine (47, 0.0f, (float) getWidth());
 }

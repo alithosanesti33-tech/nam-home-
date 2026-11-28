@@ -112,7 +112,10 @@ private:
     juce::TextButton browseT3k { "Browse TONE3000" };
     juce::TextButton cabStudioBtn { "Cab Studio" };
     std::unique_ptr<CabStudioPage> cabPage;
-    void openCabStudio (bool open);
+    void openCabStudio (bool open, std::shared_ptr<Block> target = nullptr);
+    std::shared_ptr<Block> cabStudioTarget();          // the rig's cab, as a Cab Studio block on the grid
+    std::shared_ptr<Block> toCabStudio (int r, int c);  // an IR loader becomes Cab Studio, with its IRs
+    void toIrLoader (std::shared_ptr<Block> studio);    // and back
     juce::Rectangle<int> pageArea;
     juce::TextButton transposeBtn;
     void updateTransposeText();

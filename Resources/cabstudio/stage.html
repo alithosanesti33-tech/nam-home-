@@ -22,9 +22,8 @@ header{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:8
 #title{position:fixed;left:12px;top:44px;z-index:2;pointer-events:none}
 #title b{display:block;font-size:18px;font-weight:800;line-height:1.15}
 #title span{color:var(--muted);font-size:11.5px}
-.tag{position:fixed;z-index:2;transform:translate(-50%,-140%);font:800 10.5px -apple-system,"Inter",sans-serif;color:#000;border-radius:999px;padding:2px 8px;pointer-events:none;white-space:nowrap}
+.tag{position:fixed;z-index:2;transform:translate(14px,-50%);font:800 10px -apple-system,"Inter",sans-serif;color:#000;border-radius:999px;padding:2px 8px;pointer-events:none;white-space:nowrap}
 .tag i{font-style:normal;font-weight:600;opacity:.75}
-#tagB{transform:translate(-50%,70%)}
 #hint{position:fixed;left:12px;bottom:8px;right:12px;font-size:11px;color:#5e616a;z-index:2;pointer-events:none}
 #empty{position:fixed;inset:0;display:none;place-items:center;text-align:center;color:var(--muted);z-index:4;padding:30px}
 #empty b{display:block;color:var(--ink);font-size:16px;margin-bottom:6px}
@@ -39,13 +38,14 @@ header{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:8
   </div>
   <button class="btn" id="reset">Reset view</button>
   <span class="sp"></span>
+  <button class="btn" id="labels" aria-pressed="false">Labels</button>
   <button class="btn" id="spots" aria-pressed="true">Measured spots</button>
   <button class="btn" id="grille" aria-pressed="false">Grille</button>
 </header>
 <div id="title"><b id="cabName"></b><span id="cabInfo"></span></div>
 <div class="tag" id="tagA" style="background:var(--a)"></div>
 <div class="tag" id="tagB" style="background:var(--b)"></div>
-<p id="hint">Drag a mic across the speaker · scroll on a mic for distance · shift-drag to angle it · drag empty space to orbit, scroll to zoom. Rings on the speaker show where the pack really measured.</p>
+<p id="hint">Hover a mic to see what it is · drag a mic across the speaker · scroll on a mic for distance · shift-drag to angle it · drag empty space to orbit, scroll to zoom. Rings on the speaker show where the pack really measured.</p>
 <div id="empty"><div><b>Pick a cab</b>Choose one from the list on the left, or drop IR packs into Cabs/Inbox on your SSD.</div></div>
 <div id="err">The 3D view couldn't start here (it needs WebGL). The controls below still work.</div>
 
@@ -415,7 +415,7 @@ function goView(v, instant) {
 
 // ---------- dragging the mics ----------
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-let drag = null, lastSend = 0, pending = null;
+let drag = null, lastSend = 0, pending = null, hoverMic = -1, labelsOn = false;
 function setNdc(e) { const r = renderer.domElement.getBoundingClientRect(); ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ndc, camera); }
 function pickMic(e) {
   setNdc(e);
@@ -451,7 +451,7 @@ cv.addEventListener('pointerdown', (e) => {
   cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing'; controls.enabled = false;
 });
 cv.addEventListener('pointermove', (e) => {
-  if (!drag) { cv.style.cursor = pickMic(e) >= 0 ? 'pointer' : 'grab'; return; }
+  if (!drag) { const h = pickMic(e); cv.style.cursor = h >= 0 ? 'pointer' : 'grab'; if (h !== hoverMic) { hoverMic = h; dirty = true; } return; }
   const m = mics[drag.i];
   if (drag.angle) m.ang = THREE.MathUtils.clamp(drag.ang0 + Math.abs(e.clientX - drag.x0) * 0.25 * Math.sign(e.clientX - drag.x0 || 1), 0, 60);
   else {
@@ -465,7 +465,8 @@ cv.addEventListener('pointermove', (e) => {
   tell(drag.i); refresh();
 });
 const endDrag = () => { if (drag) { try { cv.releasePointerCapture(drag.id); } catch (err) {} if (pending) { send(pending); pending = null; } drag = null; cv.style.cursor = 'grab'; controls.enabled = true; } };
-cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointerleave', () => { if (hoverMic !== -1) { hoverMic = -1; dirty = true; } }); cv.addEventListener('pointercancel', endDrag);
 cv.addEventListener('wheel', (e) => {
   const i = pickMic(e); if (i < 0) return;
   e.stopImmediatePropagation(); e.preventDefault();
@@ -488,8 +489,9 @@ function refresh() {
   });
   dirty = true;
 }
-function placeTag(el, m) {
-  if (!m.on || !cab) { el.style.display = 'none'; return; }
+function placeTag(el, m, i) {
+  const show = labelsOn || hoverMic === i || (drag && drag.i === i);   // labels only when you want them, so they don't cover the cab
+  if (!m.on || !cab || !show) { el.style.display = 'none'; return; }
   const p = m.root.position.clone(); p.y += m.mic.side ? 1.8 : 1.5;
   p.project(camera); const r = cv.getBoundingClientRect();
   el.style.left = (r.left + (p.x + 1) / 2 * r.width) + 'px'; el.style.top = (r.top + (1 - p.y) / 2 * r.height) + 'px';
@@ -499,6 +501,7 @@ function placeTag(el, m) {
 $('views').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) goView(b.dataset.view); });
 $('reset').addEventListener('click', () => goView('threeq'));
 $('grille').addEventListener('click', () => { grilleOn = !grilleOn; if (grilleMesh) grilleMesh.visible = grilleOn; $('grille').setAttribute('aria-pressed', grilleOn); dirty = true; });
+$('labels').addEventListener('click', () => { labelsOn = !labelsOn; $('labels').setAttribute('aria-pressed', labelsOn); dirty = true; });
 $('spots').addEventListener('click', () => { spotsOn = !spotsOn; if (spotGroup) spotGroup.visible = spotsOn; $('spots').setAttribute('aria-pressed', spotsOn); dirty = true; });
 
 // ---------- state from the app ----------
@@ -544,7 +547,7 @@ function loop(now) {
   if (!dirty || !cab) return;
   dirty = false;
   renderer.render(scene, camera);
-  placeTag($('tagA'), mics[0]); placeTag($('tagB'), mics[1]);
+  placeTag($('tagA'), mics[0], 0); placeTag($('tagB'), mics[1], 1);
 }
 resize();
 requestAnimationFrame(loop);

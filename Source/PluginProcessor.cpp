@@ -489,12 +489,15 @@ void NAMHomeProcessor::afterAmpLoaded (int row, int col)
             if (auto cab = std::dynamic_pointer_cast<CabBlock> (engine.get (row, c))) { cab->enabled = false; ++n; }
         if (n > 0 && onNotice) onNotice ("This capture includes its cab, so the cab block after it was switched off.");
         // Cab Studio would add a second cab: switch it to Enhance only (its tone controls, no cab)
-        if (auto rc = engine.rigCab (false); rc != nullptr && rc->enabled.load())
-            if (auto* mode = rc->param ("mode"); mode != nullptr && mode->getInt() == 0)
-            {
-                mode->set (1);
-                if (onNotice) onNotice ("This capture includes its cab, so Cab Studio switched to Enhance only.");
-            }
+        std::vector<std::shared_ptr<Block>> studios { engine.rigCab (false) };
+        for (int c = col + 1; c < Engine::cols; ++c) studios.push_back (engine.get (row, c));
+        for (auto& rc : studios)
+            if (rc != nullptr && rc->getType() == Block::Type::CabStudio && rc->enabled.load())
+                if (auto* mode = rc->param ("mode"); mode != nullptr && mode->getInt() == 0)
+                {
+                    mode->set (1);
+                    if (onNotice) onNotice ("This capture includes its cab, so Cab Studio switched to Enhance only.");
+                }
         return;
     }
 

@@ -33,6 +33,11 @@ public:
     float clockAngle (int k) const { return clock[(size_t) (k & 1)].load(); }
     void setClockAngle (int k, float deg) { clock[(size_t) (k & 1)] = deg; }
 
+    // start from IRs you had in an IR loader: the cab they belong to, Mic A on IR 1's spot (and Mic
+    // B on IR 2's), "As recorded" so it sounds the same. False if the IR isn't in your library.
+    bool seedFrom (const juce::File& ir1, const juce::File& ir2, float level1, float level2);
+    juce::File originalIr (int k) const;   // what it was started from (to go back to the IR loader)
+
     // what the builder did, for the editor
     struct Info
     {
@@ -40,6 +45,8 @@ public:
         bool measured[2] { false, false };
         float phaseMatch = 0;      // 0..1: how well A and B line up (1 = in phase)
         int alignSamples = 0;      // how far B was moved to line up with A (+ later, - earlier)
+        juce::String file[2];      // the measured IR each mic is closest to
+        bool flippedB = false;     // auto align turned B the right way up
         juce::String cabName;
         bool cabMissing = false;
         int builds = 0;
@@ -66,6 +73,7 @@ private:
     juce::String signature() const;
     mutable std::mutex lock;
     juce::String cabId, speakerType;
+    juce::String fromIr[2];
     Info last;
     std::array<std::atomic<float>, numMics> clock {};
 

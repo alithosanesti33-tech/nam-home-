@@ -356,6 +356,24 @@ void Library::index()
     save();
 }
 
+bool Library::locate (const juce::File& f, Entry& cabOut, Ir& irOut) const
+{
+    juce::String rel;
+    if (f.isAChildOf (store())) rel = f.getRelativePathFrom (store()).replaceCharacter ('\\', '/');
+    else if (f.isAChildOf (root().getParentDirectory())) rel = "@lib/" + f.getRelativePathFrom (root().getParentDirectory()).replaceCharacter ('\\', '/');
+    const auto name = f.getFileName().toLowerCase();
+    std::lock_guard<std::mutex> l (m);
+    for (int pass = 0; pass < 2; ++pass)
+        for (auto& e : list)
+            for (auto& i : e.irs)
+                if (pass == 0 ? (rel.isNotEmpty() && i.file == rel) : i.file.fromLastOccurrenceOf ("/", false, false).toLowerCase() == name || i.file.toLowerCase() == name)
+                {
+                    cabOut = e; irOut = i;
+                    return true;
+                }
+    return false;
+}
+
 juce::File Library::fileFor (const juce::String& rel) const
 {
     return rel.startsWith ("@lib/") ? root().getParentDirectory().getChildFile (rel.substring (5)) : store().getChildFile (rel);

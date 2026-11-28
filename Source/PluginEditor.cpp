@@ -5,6 +5,7 @@
 #endif
 
 using namespace juce;
+static bool findCell (Engine& e, const std::shared_ptr<Block>& b, int& row, int& col);
 
 //==============================================================================
 void TempoDisplay::paint (Graphics& g)
@@ -171,7 +172,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     metroBtn.onClick = [this] { proc.engine.metronomeOn = ! proc.engine.metronomeOn.load(); metroBtn.lit = proc.engine.metronomeOn.load(); metroBtn.repaint(); };
     cabStudioBtn.setColour (TextButton::buttonColourId, theme::raised);
     cabStudioBtn.setColour (TextButton::textColourOffId, Colour (0xffa855ff));
-    cabStudioBtn.setTooltip ("Cab Studio: your rig's cab with two mics, in 3D (plays right after the amp)");
+    cabStudioBtn.setTooltip ("Cab Studio: edit your rig's cab (or the IR in it) with two mics, in 3D");
     cabStudioBtn.onClick = [this] { openCabStudio (cabPage == nullptr); };
     browseT3k.setColour (TextButton::buttonColourId, theme::raised);
     browseT3k.setTooltip ("Pick tones on TONE3000 and download them into your library");
@@ -409,11 +410,12 @@ void NAMHomeEditor::resized()
     outMeter.setBounds (t.removeFromRight (90).withSizeKeepingCentre (90, 8));
     t.removeFromRight (40);
     inMeter.setBounds (t.removeFromRight (90).withSizeKeepingCentre (90, 8));
-    t.removeFromRight (230);
-    cabStudioBtn.setBounds (t.removeFromRight (110));
+    t.removeFromRight (jlimit (16, 230, t.getWidth() - 400));
+    cabStudioBtn.setBounds (t.removeFromRight (100));
     t.removeFromRight (8);
-    browseT3k.setBounds (t.removeFromRight (jmin (170, jmax (0, t.getWidth() - 10))));
-    browseT3k.setVisible (browseT3k.getWidth() > 120);
+    browseT3k.setButtonText (t.getWidth() > 190 ? "Browse TONE3000" : "TONE3000");
+    browseT3k.setBounds (t.removeFromRight (jmin (160, jmax (0, t.getWidth() - 10))));
+    browseT3k.setVisible (browseT3k.getWidth() >= 84);
 
     r.removeFromTop (12);
     pageArea = r;
@@ -468,6 +470,7 @@ void NAMHomeEditor::openTuner()
 void NAMHomeEditor::selectCell (Point<int> cell)
 {
     auto b = proc.engine.get (cell.y, cell.x);
+    if (b != nullptr && b->getType() == Block::Type::CabStudio) { openCabStudio (true, b); return; }   // Cab Studio opens full screen
     if (b != nullptr) openDrawer (b);
     else closeDrawer();
     grid.repaint();
@@ -529,7 +532,9 @@ void NAMHomeEditor::timerCallback()
     if (cabPage != nullptr)
     {
         // a preset change brings its own cab: follow it
-        if (proc.engine.rigCab (false) != cabPage->block()) openCabStudio (true);
+        // a preset change takes its cab with it
+        int r, c;
+        if (! findCell (proc.engine, cabPage->block(), r, c) && proc.engine.rigCab (false) != cabPage->block()) openCabStudio (false);
         else cabPage->sync();
     }
     {
@@ -576,14 +581,105 @@ void NAMHomeEditor::mouseDown (const MouseEvent& e)
     if (! panicLabel.isEmpty() && panicLabel.contains (e.getPosition())) { proc.triggerPanic(); repaint(); }
 }
 
-void NAMHomeEditor::openCabStudio (bool open)
+static bool findCell (Engine& e, const std::shared_ptr<Block>& b, int& row, int& col)
+{
+    for (int r = 0; r < Engine::rows; ++r)
+        for (int c = 0; c < Engine::cols; ++c)
+            if (e.get (r, c) == b) { row = r; col = c; return true; }
+    return false;
+}
+
+std::shared_ptr<Block> NAMHomeEditor::toCabStudio (int r, int c)
+{
+    auto old = proc.engine.get (r, c);
+    auto* cb = dynamic_cast<CabBlock*> (old.get());
+    if (cb == nullptr) return old;
+    std::shared_ptr<Block> studio (Block::create (Block::Type::CabStudio).release());
+    auto* cs = dynamic_cast<CabStudioBlock*> (studio.get());
+    const File ir1 = cb->isIrLoaded (0) ? File (cb->getIrPath (0)) : File();
+    const File ir2 = cb->isIrLoaded (1) ? File (cb->getIrPath (1)) : File();
+    if (ir1 != File() && ! cs->seedFrom (ir1, ir2, cb->param ("level1")->get(), cb->param ("level2")->get()))
+    {
+        message ("That IR isn't in your NAM Home library folder, so Cab Studio can't find its cab. Put it in the library (or Cabs/Inbox) and try again.", true);
+        return nullptr;
+    }
+    studio->param ("lowCut")->set (jmax (20.0f, cb->param ("lowCut")->get()));
+    studio->param ("highCut")->set (jlimit (3000.0f, 20000.0f, cb->param ("highCut")->get()));
+    studio->enabled = old->enabled.load();
+    if (drawer.current() == old) closeDrawer();
+    proc.engine.set (r, c, studio);
+    proc.dirty = true;
+    grid.repaint();
+    return studio;
+}
+
+void NAMHomeEditor::toIrLoader (std::shared_ptr<Block> studio)
+{
+    auto* cs = dynamic_cast<CabStudioBlock*> (studio.get());
+    int r = 0, c = 0;
+    if (cs == nullptr || ! findCell (proc.engine, studio, r, c)) return;
+    const auto f1 = cs->originalIr (0);
+    const auto f2 = cs->param ("bOn")->on() ? cs->originalIr (1) : File();
+    std::shared_ptr<Block> loader (Block::create (Block::Type::Cab).release());
+    auto* cb = dynamic_cast<CabBlock*> (loader.get());
+    if (f1.existsAsFile()) cb->loadIr (0, f1);
+    if (f2.existsAsFile()) cb->loadIr (1, f2);
+    cb->param ("level1")->set (cs->param ("aLevel")->get());
+    cb->param ("level2")->set (cs->param ("bLevel")->get());
+    cb->param ("lowCut")->set (cs->param ("lowCut")->get());
+    cb->param ("highCut")->set (cs->param ("highCut")->get());
+    loader->enabled = studio->enabled.load();
+    openCabStudio (false);
+    proc.engine.set (r, c, loader);
+    proc.dirty = true;
+    openDrawer (loader);
+    grid.repaint();
+}
+
+std::shared_ptr<Block> NAMHomeEditor::cabStudioTarget()
+{
+    auto& e = proc.engine;
+    // the cab you have open, then any Cab Studio, then an IR loader (it becomes Cab Studio)
+    if (auto cur = drawer.current(); drawerOpen && cur != nullptr)
+    {
+        int r, c;
+        if (cur->getType() == Block::Type::CabStudio) return cur;
+        if (cur->getType() == Block::Type::Cab && findCell (e, cur, r, c)) return toCabStudio (r, c);
+    }
+    for (int r = 0; r < Engine::rows; ++r) for (int c = 0; c < Engine::cols; ++c)
+        if (auto b = e.get (r, c); b != nullptr && b->getType() == Block::Type::CabStudio) return b;
+    for (int pass = 0; pass < 2; ++pass)
+        for (int r = 0; r < Engine::rows; ++r) for (int c = 0; c < Engine::cols; ++c)
+            if (auto b = e.get (r, c); b != nullptr && b->getType() == Block::Type::Cab && (pass == 1 || b->enabled.load())) return toCabStudio (r, c);
+    // no cab yet: a new one right after the amp (on the grid, so you can see it)
+    int ar = 0, ac = -1;
+    for (int r = 0; r < Engine::rows && ac < 0; ++r) for (int c = 0; c < Engine::cols && ac < 0; ++c)
+        if (auto b = e.get (r, c); b != nullptr && b->getType() == Block::Type::NamAmp) { ar = r; ac = c; }
+    std::shared_ptr<Block> b (Block::create (Block::Type::CabStudio).release());
+    const int at = ac + 1;
+    bool placed = false;
+    if (at < Engine::cols && e.get (ar, at) == nullptr) { e.set (ar, at, b); placed = true; }
+    else if (at < Engine::cols) placed = e.insertInRow (ar, at, b);   // moves the blocks after the amp along
+    if (placed) { proc.dirty = true; grid.repaint(); return b; }
+    message ("There's no room on that row for a cab. Make a space after your amp first.", true);
+    return nullptr;
+}
+
+void NAMHomeEditor::openCabStudio (bool open, std::shared_ptr<Block> target)
 {
     cabPage = nullptr;
     if (open)
     {
-        cabPage = std::make_unique<CabStudioPage> (proc, proc.engine.rigCab (true));
+        if (target == nullptr) target = cabStudioTarget();
+        if (target == nullptr) open = false;
+    }
+    if (open)
+    {
+        closeDrawer();
+        cabPage = std::make_unique<CabStudioPage> (proc, target);
         cabPage->onClose = [this] { MessageManager::callAsync ([this] { openCabStudio (false); }); };
         cabPage->onError = [this] (const String& s) { message (s, true); };
+        cabPage->onUseIr = [this] { auto b = cabPage != nullptr ? cabPage->block() : nullptr; MessageManager::callAsync ([this, b] { toIrLoader (b); }); };
         addAndMakeVisible (*cabPage);
         cabPage->setBounds (pageArea);
         toasts.toFront (false);
