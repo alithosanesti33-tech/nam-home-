@@ -58,6 +58,7 @@ public:
     juce::File root() const;
     juce::File inbox() const { return root().getChildFile ("Inbox"); }
     juce::File store() const { return root().getChildFile ("Library"); }
+    juce::File fileFor (const juce::String& relFile) const;   // an IR's file (Cabs/Library, or "@lib/..." in your main library)
 
     void rescan();                                    // imports the inbox and re-reads the store (background)
     void importFiles (const juce::Array<juce::File>& files);   // copies into the inbox, then rescans

@@ -74,7 +74,7 @@ void parseName (const juce::String& path, Ir& ir)
     const auto w = words (p);
     auto has = [&w] (const char* t) { return w.contains (t); };
     // microphone
-    if (p.contains ("sm57") || p.contains ("sm 57") || has ("57") || p.contains ("sm-57")) ir.mic = Mic::SM57;
+    if (p.contains ("sm57") || p.contains ("sm 57") || has ("57") || p.contains ("sm-57") || has ("or57") || has ("545") || has ("545sd") || has ("beta57")) ir.mic = Mic::SM57;
     else if (p.contains ("md421") || p.contains ("md 421") || has ("421") || p.contains ("md-421")) ir.mic = Mic::MD421;
     else if (p.contains ("r121") || p.contains ("r-121") || p.contains ("r 121") || has ("121") || p.contains ("royer")) ir.mic = Mic::R121;
     else if (p.contains ("u87") || p.contains ("u 87") || p.contains ("u-87") || has ("87") || p.contains ("neumann")) ir.mic = Mic::U87;
@@ -89,12 +89,14 @@ void parseName (const juce::String& path, Ir& ir)
     ir.room = has ("room") || has ("rm") || p.contains ("ambien") || has ("hall") || has ("far") || has ("amb");
     // position across the speaker
     const bool cap = p.contains ("cap"), edge = p.contains ("edge");
+    const bool offCentre = p.contains ("off cent") || p.contains ("offcent") || p.contains ("off-cent") || p.contains ("off_cent");   // "1.5in Off Center" is a distance from the centre
     if (p.contains ("capedge") || p.contains ("cap edge") || p.contains ("cap-edge") || p.contains ("cap_edge") || (cap && edge)) ir.r = 2.0f;
-    else if (p.contains ("cent") || p.contains ("cntr") || p.contains ("dustcap") || cap) ir.r = 0.5f;
+    else if (((p.contains ("cent") || p.contains ("cntr")) && ! offCentre) || p.contains ("dustcap") || cap) ir.r = 0.5f;
     else if (p.contains ("coneedge") || p.contains ("cone edge") || p.contains ("outer") || p.contains ("surround")) ir.r = 5.0f;
     else if (p.contains ("cone")) ir.r = 3.5f;
     else if (edge) ir.r = 5.0f;
     // distance and angle: a number followed by a unit
+    juce::Array<float> inches;
     for (int i = 0; i < w.size(); ++i)
     {
         const auto t = w[i];
@@ -102,11 +104,16 @@ void parseName (const juce::String& path, Ir& ir)
         const auto next = i + 1 < w.size() ? w[i + 1] : juce::String();
         const bool digits = t.containsAnyOf ("0123456789");
         if (! digits) continue;
-        if (t.endsWith ("in") || t.endsWith ("inch") || t.endsWith ("inches") || next == "in" || next == "inch" || next == "inches") ir.dist = num (t);
+        if (t.endsWith ("in") || t.endsWith ("inch") || t.endsWith ("inches") || next == "in" || next == "inch" || next == "inches") inches.add (num (t));
         else if (t.endsWith ("cm") || next == "cm") ir.dist = num (t) / 2.54f;
         else if (t.endsWith ("mm") || next == "mm") ir.dist = num (t) / 25.4f;
         else if (t.endsWith ("deg") || t.endsWith ("degrees") || next == "deg" || next == "degrees") ir.angle = num (t);
     }
+    // one inch value is the distance; two ("1.5in Off Center ... 0in", "A12Q 013 2.0in 1.0in") are
+    // the position from the centre, then the distance
+    if (inches.size() == 1) ir.dist = inches[0];
+    else if (inches.size() >= 2) { if (ir.r < 0) ir.r = inches[0]; ir.dist = inches[1]; }
+    for (auto& t : w) if (t.startsWith ("oa") && t.length() > 2 && t.substring (2).containsOnly ("0123456789")) ir.angle = (float) t.substring (2).getIntValue();
     if (p.contains ("\"")) { const auto q = p.upToFirstOccurrenceOf ("\"", false, false); const auto lw = words (q); if (! lw.isEmpty()) ir.dist = lw[lw.size() - 1].retainCharacters ("0123456789.").getFloatValue(); }
     if (ir.angle < 0 && (p.contains ("offaxis") || p.contains ("off axis") || p.contains ("off-axis") || has ("ofx") || has ("oa") || p.contains ("angled") || p.contains ("tilted"))) ir.angle = 45.0f;
     if (ir.angle < 0 && (p.contains ("onaxis") || p.contains ("on axis") || p.contains ("on-axis"))) ir.angle = 0.0f;
@@ -260,62 +267,84 @@ void Library::importInbox()
 
 void Library::index()
 {
-    const auto lib = store();
     std::map<juce::String, Entry> cabs;
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     // a sample-rate folder ("44.1k", "48kHz", "96") holds duplicates: prefer 48 kHz when it's there
     auto rateFolder = [] (const juce::String& s) { const auto t = s.toLowerCase().removeCharacters (" "); return t == "44" || t == "48" || t == "96" || t.startsWith ("44.1") || t.startsWith ("44k") || t.startsWith ("48k") || t.startsWith ("96k") || t.endsWith ("khz"); };
-    std::map<juce::String, bool> has48;
-    for (const auto& e : juce::RangedDirectoryIterator (lib, true, "*", juce::File::findDirectories))
-        if (rateFolder (e.getFile().getFileName()) && e.getFile().getFileName().contains ("48")) has48[e.getFile().getParentDirectory().getFullPathName()] = true;
+    std::set<juce::String> seenNames;   // the same IR in Cabs/Library and in your main library shows once
 
-    for (const auto& e : juce::RangedDirectoryIterator (lib, true, "*.wav;*.aif;*.aiff", juce::File::findFiles))
+    // base: the folder to read; prefix: how its files are named in the index ("" = Cabs/Library,
+    // "@lib/" = your main NAM Home library, read where the files already are)
+    auto scan = [&] (const juce::File& lib, const juce::String& prefix, bool mainLibrary)
     {
-        const auto f = e.getFile();
-        if (f.getFileName().startsWithChar ('.') || f.getFullPathName().contains ("__MACOSX")) continue;
-        auto rel = f.getRelativePathFrom (lib).replaceCharacter ('\\', '/');
-        // skip the non-48k copies when a 48k folder exists beside them
-        bool skip = false;
-        for (auto d = f.getParentDirectory(); d != lib && d.isAChildOf (lib); d = d.getParentDirectory())
-            if (rateFolder (d.getFileName()) && ! d.getFileName().contains ("48") && has48.count (d.getParentDirectory().getFullPathName())) { skip = true; break; }
-        if (skip) continue;
-        // which cab: the top folder is the pack; a sub-folder that names a cab size or model is its own cab
-        const auto parts = juce::StringArray::fromTokens (rel, "/", "");
-        juce::String cabFolder = parts.size() > 1 ? parts[0] : juce::String ("My IRs");
-        juce::String cabName = cabFolder;
-        // a top folder that already names a cab ("Tweed Deluxe 5E3 1x12") keeps everything under it as one cab.
-        // Otherwise the cab is the deepest folder that isn't about the mic, its position, the sample rate
-        // or just the speaker (those are choices inside one cab): "Pack/American Twin/48k/SM57/cap.wav"
-        // is the cab "American Twin"; "Pack/V30/SM57/cap.wav" is the cab "Pack" with a V30 speaker.
-        Entry topProbe; parseCab (parts[0].toLowerCase(), topProbe);
-        for (int k = parts.size() - 2; k >= 1 && topProbe.speakers == 0; --k)
+        if (! lib.isDirectory()) return;
+        std::map<juce::String, bool> has48;
+        for (const auto& e : juce::RangedDirectoryIterator (lib, true, "*", juce::File::findDirectories))
+            if (rateFolder (e.getFile().getFileName()) && e.getFile().getFileName().contains ("48")) has48[e.getFile().getParentDirectory().getFullPathName()] = true;
+
+        for (const auto& e : juce::RangedDirectoryIterator (lib, true, "*.wav;*.aif;*.aiff", juce::File::findFiles))
         {
-            const auto low = parts[k].toLowerCase();
-            Entry probe; parseCab (low, probe);
-            Ir mp; parseName (low, mp);
-            const bool micFolder = mp.mic != Mic::Other || mp.micLabel.isNotEmpty() || mp.r >= 0 || mp.dist >= 0 || mp.angle >= 0 || mp.room
-                                   || low.contains ("mix") || low.contains ("blend") || low.contains ("multi") || low.contains ("single");
-            const bool speakerOnly = probe.speaker.isNotEmpty() && probe.speakers == 0;
-            if (micFolder || rateFolder (parts[k]) || speakerOnly) continue;
-            cabFolder = parts.joinIntoString ("/", 0, k + 1); cabName = parts[k];
-            break;
+            const auto f = e.getFile();
+            if (f.getFileName().startsWithChar ('.') || f.getFullPathName().contains ("__MACOSX")) continue;
+            auto rel = f.getRelativePathFrom (lib).replaceCharacter ('\\', '/');
+            const auto parts = juce::StringArray::fromTokens (rel, "/", "");
+            if (mainLibrary)
+            {
+                // only cab IRs: not Cab Studio's own folder, recordings, loops, drums or instruments
+                static const char* skipTop[] = { "Cabs", "Instruments", "Loops", "Drums", "Setlists", "Presets", "Recordings", "Backing Tracks" };
+                bool skipIt = false;
+                if (parts.size() > 1) for (auto* t : skipTop) if (parts[0].equalsIgnoreCase (t)) skipIt = true;
+                if (skipIt || f.getSize() > 2000000 || seenNames.count (f.getFileName().toLowerCase()) > 0) continue;
+                std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (f) };
+                if (r == nullptr || r->lengthInSamples > r->sampleRate * 1.2) continue;   // songs, takes and rooms aren't cab IRs
+            }
+            else seenNames.insert (f.getFileName().toLowerCase());
+            // skip the non-48k copies when a 48k folder exists beside them
+            bool skip = false;
+            for (auto d = f.getParentDirectory(); d != lib && d.isAChildOf (lib); d = d.getParentDirectory())
+                if (rateFolder (d.getFileName()) && ! d.getFileName().contains ("48") && has48.count (d.getParentDirectory().getFullPathName())) { skip = true; break; }
+            if (skip) continue;
+            // which cab: a top folder that already names a cab ("Tweed Deluxe 5E3 1x12") keeps everything
+            // under it as one cab. Otherwise the cab is the deepest folder that isn't about the mic, its
+            // position, the sample rate or just the speaker (those are choices inside one cab):
+            // "Pack/American Twin/48k/SM57/cap.wav" is the cab "American Twin"; "Pack/V30/SM57/cap.wav"
+            // is the cab "Pack" with a V30 speaker.
+            juce::String cabFolder = parts.size() > 1 ? parts[0] : juce::String (mainLibrary ? "Loose IRs" : "My IRs");
+            juce::String cabName = cabFolder;
+            Entry topProbe; parseCab (parts[0].toLowerCase(), topProbe);
+            for (int k = parts.size() - 2; k >= 1 && topProbe.speakers == 0; --k)
+            {
+                const auto low = parts[k].toLowerCase();
+                Entry probe; parseCab (low, probe);
+                Ir mp; parseName (low, mp);
+                const bool micFolder = mp.mic != Mic::Other || mp.micLabel.isNotEmpty() || mp.r >= 0 || mp.dist >= 0 || mp.angle >= 0 || mp.room
+                                       || low.contains ("mix") || low.contains ("blend") || low.contains ("multi") || low.contains ("single");
+                const bool speakerOnly = probe.speaker.isNotEmpty() && probe.speakers == 0;
+                if (micFolder || rateFolder (parts[k]) || speakerOnly) continue;
+                cabFolder = parts.joinIntoString ("/", 0, k + 1); cabName = parts[k];
+                break;
+            }
+            auto& c = cabs[prefix + cabFolder];
+            if (c.id.isEmpty())
+            {
+                c.id = prefix + cabFolder; c.name = cabName.replaceCharacters ("_", " ").trim(); c.pack = parts.size() > 1 ? parts[0] : cabFolder;
+                c.user = ! mainLibrary && (parts.size() <= 1 || parts[0] == "My IRs");
+                parseCab (cabFolder.toLowerCase(), c);
+            }
+            Ir ir; ir.file = prefix + rel;
+            parseName (rel.toLowerCase(), ir);
+            { Entry sp; parseCab (rel.toLowerCase(), sp); ir.speakerType = sp.speaker; }
+            if (c.speaker.isEmpty() || c.speakers == 0) parseCab (rel.toLowerCase(), c);
+            // long files are rooms, whatever they're called
+            if (! mainLibrary)
+                if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (f) })
+                    if (r->lengthInSamples > r->sampleRate * 1.2) ir.room = true;
+            c.irs.push_back (ir);
         }
-        auto& c = cabs[cabFolder];
-        if (c.id.isEmpty())
-        {
-            c.id = cabFolder; c.name = cabName.replaceCharacters ("_", " ").trim(); c.pack = parts[0];
-            c.user = parts.size() <= 1 || parts[0] == "My IRs";
-            parseCab (cabFolder.toLowerCase(), c);
-        }
-        Ir ir; ir.file = rel;
-        parseName (rel.toLowerCase(), ir);
-        { Entry sp; parseCab (rel.toLowerCase(), sp); ir.speakerType = sp.speaker; }
-        if (c.speaker.isEmpty() || c.speakers == 0) parseCab (rel.toLowerCase(), c);
-        // long files are rooms, whatever they're called
-        if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (f) })
-            if (r->lengthInSamples > r->sampleRate * 1.2) ir.room = true;
-        c.irs.push_back (ir);
-    }
+    };
+    scan (store(), {}, false);
+    scan (root().getParentDirectory(), "@lib/", true);
+
     std::vector<Entry> out;
     {
         std::lock_guard<std::mutex> l (m);
@@ -327,6 +356,11 @@ void Library::index()
     save();
 }
 
+juce::File Library::fileFor (const juce::String& rel) const
+{
+    return rel.startsWith ("@lib/") ? root().getParentDirectory().getChildFile (rel.substring (5)) : store().getChildFile (rel);
+}
+
 std::shared_ptr<const std::vector<float>> Library::audio (const juce::String& relFile)
 {
     {
@@ -334,7 +368,7 @@ std::shared_ptr<const std::vector<float>> Library::audio (const juce::String& re
         if (auto it = cache.find (relFile); it != cache.end()) return it->second;
     }
     juce::AudioFormatManager fm; fm.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (store().getChildFile (relFile)));
+    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (fileFor (relFile)));
     if (r == nullptr || r->lengthInSamples < 8) return nullptr;
     const int len = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (r->sampleRate * 1.0));
     juce::AudioBuffer<float> b ((int) std::max (1u, r->numChannels), len);

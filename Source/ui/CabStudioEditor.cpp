@@ -174,7 +174,7 @@ void CabStudioEditor::refreshList()
         if (sel < 0) { sel = 0; cs.setSpeakerType (speakerList[0]); }
         speakerBox.setSelectedItemIndex (sel, dontSendNotification);
     }
-    speakerBox.setVisible (speakerList.size() > 1);
+    if (speakerBox.isVisible() != (speakerList.size() > 1)) { speakerBox.setVisible (speakerList.size() > 1); resized(); }
     sendState (true);
 }
 
@@ -209,7 +209,7 @@ void CabStudioEditor::listBoxItemClicked (int row, const MouseEvent& m)
         menu.showMenuAsync (PopupMenu::Options(), [this, e] (int r)
         {
             if (r == 1) { cab::Library::get().setFavourite (e.id, ! e.favourite); refreshList(); }
-            if (r == 2) cab::Library::get().store().getChildFile (e.id).revealToUser();
+            if (r == 2) cab::Library::get().fileFor (e.id).revealToUser();
         });
         return;
     }

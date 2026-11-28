@@ -43,7 +43,6 @@ tweed_speaker() {
   case "$n" in
     *1958*deluxe*|*oxford*)            echo "Oxford Alnico (1958 Deluxe)" ;;
     *speed*shop*|*a12q*)               echo "Weber A12Q (Speed Shop)" ;;
-    *diy*tweed*|*5e3*head*)            echo "Jensen DIY 5E3" ;;
     *usa*tweed*|*audio*assault*)       echo "Jensen P12Q (Audio Assault 5C3)" ;;
     *tweed*|*5e3*|*5c3*)               echo "Tweed speaker" ;;
     *)                                 echo "" ;;
