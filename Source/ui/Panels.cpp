@@ -4,7 +4,8 @@
 
 using namespace juce;
 
-static const char* chipNames[] = { "All", "Adjustable amps", "NAM captures", "Pedals", "Cabs / IRs", "Effects", "Synthesizers", "Saxophone" };
+static const char* chipNames[] = { "All", "Adjustable amps", "NAM captures", "Pedals", "Cabs / IRs", "Effects", "Synthesizers", "Saxophone", "Amp + cab captures" };
+static const int chipOrder[] = { 0, 1, 2, 8, 3, 4, 5, 6, 7 };   // amp + cab captures sit next to the other captures
 
 //==============================================================================
 LibraryPanel::LibraryPanel (NAMHomeProcessor& p) : proc (p)
@@ -15,7 +16,7 @@ LibraryPanel::LibraryPanel (NAMHomeProcessor& p) : proc (p)
     search.onTextChange = [this] { refresh(); };
     addAndMakeVisible (search);
 
-    for (int i = 0; i < 8; ++i)
+    for (int i : chipOrder)
     {
         auto* b = chips.add (new TextButton (chipNames[i]));
         b->setClickingTogglesState (true);
@@ -105,7 +106,10 @@ void LibraryPanel::refresh()
 
     const bool all = filter == 0;
     if (all || filter == 1) addItems ("Adjustable amps", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && i.adjustable; });
-    if (all || filter == 2) addCaptureTree ("NAM amp captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && ! i.adjustable; });
+    // captures that already include their cab are kept apart (they don't need Cab Studio or an IR)
+    auto withCab = [] (const LibraryItem& i) { return i.gearType.containsIgnoreCase ("cab"); };
+    if (all || filter == 2) addCaptureTree ("NAM amp captures", [withCab] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && ! i.adjustable && ! withCab (i); });
+    if (all || filter == 8) addCaptureTree ("Amp + cab captures", [withCab] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Amp && ! i.adjustable && withCab (i); });
     if (all || filter == 2 || filter == 3) addCaptureTree ("NAM pedal captures", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::Pedal; });
     if (all || filter == 4) addItems ("Cabinet IRs", [] (const LibraryItem& i) { return i.kind == LibraryItem::Kind::IR; });
     auto addBuiltIns = [&] (const String& label, std::function<bool (Block::Type)> pred)
