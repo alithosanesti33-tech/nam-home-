@@ -399,6 +399,7 @@ juce::String blockHelp (const Block& b)
     {
         case Block::Type::NamAmp: return "An amp capture (NAM). Drag captures onto it from the library. Its colour shows how much gain the capture has.";
         case Block::Type::NamPedal: return "A pedal capture (NAM), like a drive or boost.";
+        case Block::Type::CabStudio: return "A cabinet from your IR library with two mics you place on the speaker in 3D. Measured spots play the real IRs; anything in between is blended or modelled, and the editor says which.";
         case Block::Type::Cab: return "Speaker cabinet IRs. Blend up to three, each with its own level, pan, polarity and alignment.";
         case Block::Type::Freeze: return "Freezes what you play into an endless pad (Strymon Night Sky style), with note selection, shimmer and a step sequencer.";
         case Block::Type::Looper: return "A 4-track looper in the style of the Guitargate Teleport. Loops are saved as WAVs on your SSD.";

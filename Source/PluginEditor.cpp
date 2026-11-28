@@ -418,7 +418,11 @@ void NAMHomeEditor::resized()
     if (drawerOpen)
     {
         const int maxH = (int) (getHeight() * 0.75f);
-        const int h = drawerLive >= 0 ? jlimit (60, maxH, drawerLive) : jlimit (180, maxH, drawerHeight);
+        // Cab Studio needs room for its 3D stage: it opens taller (dragging still sets the height)
+        auto cur = drawer.current();
+        const bool studio = cur != nullptr && cur->getType() == Block::Type::CabStudio;
+        const int want = studio ? jmax (drawerHeight, (int) (getHeight() * 0.68f)) : drawerHeight;
+        const int h = drawerLive >= 0 ? jlimit (60, maxH, drawerLive) : jlimit (180, maxH, want);
         drawer.setBounds (r.removeFromBottom (h));
         r.removeFromBottom (12);
     }
@@ -463,7 +467,7 @@ void NAMHomeEditor::selectCell (Point<int> cell)
 
 void NAMHomeEditor::openDrawer (std::shared_ptr<Block> b)
 {
-    if (drawer.current() != b) drawer.show (b);
+    if (drawer.current() != b) { drawer.show (b); if (drawerOpen) resized(); }
     drawer.setVisible (true);
     if (! drawerOpen) { drawerOpen = true; resized(); }
 }
@@ -503,7 +507,7 @@ void NAMHomeEditor::refreshAll()
         const auto cur = drawer.current();
         auto sel = proc.engine.get (grid.selected.y, grid.selected.x);
         if (sel == nullptr) closeDrawer();
-        else if (sel != cur) drawer.show (sel);
+        else if (sel != cur) { drawer.show (sel); resized(); }
     }
     repaint();
 }

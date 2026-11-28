@@ -1,6 +1,7 @@
 #include "Blocks.h"
 #include "BlockTypes.h"
 #include "Rhythm.h"
+#include "cab/CabStudio.h"
 
 juce::String Param::text() const
 {
@@ -270,6 +271,7 @@ juce::String Block::typeName (Type t)
         case Type::TwelveString: return "12-string";
         case Type::Granular:     return "Granular";
         case Type::Acoustic:     return "Acoustic sim";
+        case Type::CabStudio:    return "Cab Studio";
         case Type::NumTypes:     break;
     }
     return {};
@@ -283,7 +285,7 @@ juce::String Block::categoryName (Type t)
         case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor:
         case Type::Whammy: case Type::Octave: case Type::EnvFilter: case Type::Swell: case Type::Fuzz: case Type::ATDrive: return "Pedals";
         case Type::TwelveString: case Type::Acoustic: return "Guitar sims";
-        case Type::Cab: return "Cabs";
+        case Type::Cab: case Type::CabStudio: return "Cabs";
         case Type::GraphicEQ: case Type::ParametricEQ: return "EQ";
         case Type::Gate: case Type::Utility: return "Utility";
         case Type::PhatTrack: return "Synthesizers";
@@ -298,7 +300,7 @@ juce::String Block::libraryGroup (Type t)
     switch (t)
     {
         case Type::NamAmp: return "Amps";
-        case Type::Cab: return "Cabs";
+        case Type::Cab: case Type::CabStudio: return "Cabs";
         case Type::NamPedal: case Type::Drive: case Type::Fuzz: case Type::ATDrive: return "Drive";
         case Type::Gate: case Type::Compressor: case Type::Swell: case Type::Volume:
         case Type::GraphicEQ: case Type::ParametricEQ: case Type::Utility: return "Dynamics & EQ";
@@ -321,7 +323,7 @@ juce::Colour Block::colour (Type t)
     switch (t)
     {
         case Type::NamAmp:       return juce::Colour (0xff00f0d0);
-        case Type::Cab:          return juce::Colour (0xffa855ff);
+        case Type::Cab: case Type::CabStudio: return juce::Colour (0xffa855ff);
         case Type::NamPedal: case Type::Drive: case Type::Wah: case Type::Volume: case Type::Compressor:
         case Type::Whammy: case Type::Octave: case Type::EnvFilter: case Type::Swell: case Type::Fuzz: case Type::ATDrive:
                                  return juce::Colour (0xffffa500);
@@ -379,6 +381,7 @@ std::unique_ptr<Block> Block::create (Type t)
         case Type::TwelveString: return std::make_unique<TwelveStringBlock>();
         case Type::Granular:     return std::make_unique<GranularBlock>();
         case Type::Acoustic:     return std::make_unique<AcousticBlock>();
+        case Type::CabStudio:    return std::make_unique<CabStudioBlock>();
         case Type::Looper:       return std::make_unique<LooperBlock>();
         case Type::Drums:        return std::make_unique<DrumsBlock>();
         case Type::NumTypes:     break;
@@ -391,7 +394,7 @@ Param* Block::variantParam() const
 {
     // the choice that picks a model: Drive "type", Compressor "model", Octave "mode", Tremolo "wave"...
     static const char* ids[] = { "type", "model" };
-    if (type == Type::NamAmp || type == Type::NamPedal || type == Type::Cab || type == Type::Whammy) return nullptr;
+    if (type == Type::NamAmp || type == Type::NamPedal || type == Type::Cab || type == Type::CabStudio || type == Type::Whammy) return nullptr;
     for (auto* id : ids)
         for (auto& prm : params)
             if (prm->id == id && prm->kind == Param::Kind::Choice) return prm.get();

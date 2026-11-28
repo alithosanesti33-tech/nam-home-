@@ -1,4 +1,5 @@
 #include "BlockEditors.h"
+#include "CabStudioEditor.h"
 #include "../ParamHelp.h"
 #include "../PluginProcessor.h"
 
@@ -728,6 +729,7 @@ std::unique_ptr<BlockEditor> createEditorFor (NAMHomeProcessor& p, std::shared_p
         case Block::Type::Cab:          return std::make_unique<CabEditor> (p, b);
         case Block::Type::ParametricEQ: return std::make_unique<PeqEditor> (p, b);
         case Block::Type::Compressor:   return std::make_unique<CompEditor> (p, b);
+        case Block::Type::CabStudio:    return std::make_unique<CabStudioEditor> (p, b);
         default:                        return std::make_unique<BlockEditor> (p, b);
     }
 }

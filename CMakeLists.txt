@@ -35,6 +35,9 @@ juce_add_binary_data(NAMHomeData SOURCES
     Resources/Inter-Regular.otf
     Resources/Inter-Medium.otf
     Resources/Inter-SemiBold.otf
+    Resources/cabstudio/stage.html
+    Resources/cabstudio/three.min.js
+    Resources/cabstudio/OrbitControls.js
 )
 
 target_sources(NAMHome PRIVATE
@@ -48,6 +51,8 @@ target_sources(NAMHome PRIVATE
     Source/Rhythm.cpp
     Source/ParamHelp.cpp
     Source/cab/CabLibrary.cpp
+    Source/cab/CabStudio.cpp
+    Source/ui/CabStudioEditor.cpp
     Source/Measure.cpp
     Source/Instruments.cpp
     Source/TalkBox.cpp
@@ -84,7 +89,7 @@ target_compile_options(NAMCore PRIVATE -O3)
 
 target_include_directories(NAMHome PRIVATE Source)
 target_compile_definitions(NAMHome PUBLIC
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1

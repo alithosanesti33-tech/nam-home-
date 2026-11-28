@@ -122,7 +122,7 @@ void parseCab (const juce::String& path, Entry& e)
     const auto p = path.endsWithIgnoreCase (".wav") ? path.upToLastOccurrenceOf (".", false, false) : path;
     struct Sz { const char* t; int n, s; };
     static const Sz sizes[] = { { "4x12", 4, 12 }, { "412", 4, 12 }, { "2x12", 2, 12 }, { "212", 2, 12 }, { "1x12", 1, 12 }, { "112", 1, 12 },
-                                { "4x10", 4, 10 }, { "410", 4, 10 }, { "2x10", 2, 10 }, { "1x10", 1, 10 }, { "1x15", 1, 15 }, { "1x8", 1, 8 }, { "1960", 4, 12 }, { "rectifier", 4, 12 }, { "oversized", 4, 12 } };
+                                { "4x10", 4, 10 }, { "410", 4, 10 }, { "2x10", 2, 10 }, { "1x10", 1, 10 }, { "1x15", 1, 15 }, { "1x8", 1, 8 }, { "1960", 4, 12 }, { "twin", 2, 12 }, { "ac30", 2, 12 }, { "ac 30", 2, 12 }, { "bassman", 4, 10 }, { "champ", 1, 8 }, { "princeton", 1, 10 }, { "deluxe", 1, 12 }, { "magnatone", 1, 12 }, { "bogner", 4, 12 }, { "rectifier", 4, 12 }, { "oversized", 4, 12 } };
     for (auto& s : sizes) if (p.contains (s.t)) { e.speakers = s.n; e.size = s.s; break; }
     struct Sp { const char* t; const char* name; };
     static const Sp spk[] = { { "v30", "V30-style" }, { "vintage 30", "V30-style" }, { "greenback", "Greenback-style" }, { "g12m", "Greenback-style" }, { "g12h", "G12H-style" },
@@ -283,12 +283,22 @@ void Library::index()
         const auto parts = juce::StringArray::fromTokens (rel, "/", "");
         juce::String cabFolder = parts.size() > 1 ? parts[0] : juce::String ("My IRs");
         juce::String cabName = cabFolder;
-        for (int k = 1; k < parts.size() - 1; ++k)
+        // a top folder that already names a cab ("Tweed Deluxe 5E3 1x12") keeps everything under it as one cab.
+        // Otherwise the cab is the deepest folder that isn't about the mic, its position, the sample rate
+        // or just the speaker (those are choices inside one cab): "Pack/American Twin/48k/SM57/cap.wav"
+        // is the cab "American Twin"; "Pack/V30/SM57/cap.wav" is the cab "Pack" with a V30 speaker.
+        Entry topProbe; parseCab (parts[0].toLowerCase(), topProbe);
+        for (int k = parts.size() - 2; k >= 1 && topProbe.speakers == 0; --k)
         {
-            Entry probe; parseCab (parts[k].toLowerCase(), probe);
-            Ir mp; parseName (parts[k].toLowerCase(), mp);
-            const bool micFolder = mp.mic != Mic::Other || mp.micLabel.isNotEmpty();
-            if (! micFolder && ! rateFolder (parts[k]) && probe.speakers > 0) { cabFolder = parts.joinIntoString ("/", 0, k + 1); cabName = parts[k]; }
+            const auto low = parts[k].toLowerCase();
+            Entry probe; parseCab (low, probe);
+            Ir mp; parseName (low, mp);
+            const bool micFolder = mp.mic != Mic::Other || mp.micLabel.isNotEmpty() || mp.r >= 0 || mp.dist >= 0 || mp.angle >= 0 || mp.room
+                                   || low.contains ("mix") || low.contains ("blend") || low.contains ("multi") || low.contains ("single");
+            const bool speakerOnly = probe.speaker.isNotEmpty() && probe.speakers == 0;
+            if (micFolder || rateFolder (parts[k]) || speakerOnly) continue;
+            cabFolder = parts.joinIntoString ("/", 0, k + 1); cabName = parts[k];
+            break;
         }
         auto& c = cabs[cabFolder];
         if (c.id.isEmpty())

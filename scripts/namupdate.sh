@@ -46,7 +46,7 @@ fi
 # Recorded drum kits for the drum machine (Drums/Kits), plus folders for your loops and drum loops
 KITS="$NH/Drums/Kits"
 if nh_ready; then
-  mkdir -p "$NH/Loops" "$NH/Drums/Loops" "$NH/Setlists"
+  mkdir -p "$NH/Loops" "$NH/Drums/Loops" "$NH/Setlists" "$NH/Cabs/Inbox"
   if [ "$(cat "$KITS/.version" 2>/dev/null)" != "v1" ]; then
     echo "Downloading the drum kits into $KITS ..."
     if curl -fL --progress-bar "https://github.com/alithosanesti33-tech/nam-home-/releases/download/drum-kits/NAM-Home-Drums.zip" -o "$TMP/drums.zip"; then
@@ -64,6 +64,8 @@ touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 killall Dock >/dev/null 2>&1 || true
 killall Finder >/dev/null 2>&1 || true
+# the Cab Studio IR helper (~/namcabs.sh)
+curl -fsSL "https://raw.githubusercontent.com/alithosanesti33-tech/nam-home-/main/scripts/namcabs.sh" -o "$HOME/namcabs.sh" 2>/dev/null && chmod +x "$HOME/namcabs.sh" || true
 # keep this script itself up to date
 curl -fsSL "https://raw.githubusercontent.com/alithosanesti33-tech/nam-home-/main/scripts/namupdate.sh" -o "$HOME/namupdate.sh.new" 2>/dev/null && mv "$HOME/namupdate.sh.new" "$HOME/namupdate.sh" && chmod +x "$HOME/namupdate.sh" || true
 echo "Installed. Opening NAM Home..."
