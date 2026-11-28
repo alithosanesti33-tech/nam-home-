@@ -1,6 +1,7 @@
 #!/bin/bash
 # Cab Studio IR helper.
-#   ~/namcabs.sh open   opens the download pages for the tweed Deluxe IRs (you click download)
+#   ~/namcabs.sh open        opens the download pages for free cab IRs (you click download)
+#   ~/namcabs.sh open tweed  just the tweed Deluxe ones
 #   ~/namcabs.sh        sorts what you downloaded into Cab Studio's Inbox on your library drive
 # Nothing here is uploaded anywhere: the IRs stay on your drive.
 
@@ -11,10 +12,21 @@ TWEED="$INBOX/Tweed Deluxe 5E3 1x12"
 
 if [ "$1" = "open" ]; then
   echo "Opening the download pages. Download each one (they land in Downloads), then run: ~/namcabs.sh"
-  open "https://origineffects.com/product/ir-cab-library/"                      # free; 5E3 Tweed Deluxe with its 1955 Jensen P12Q (+ 6 more cabs)
-  open "https://www.tone3000.com/tones/1958-deluxe-ir-1615"                     # free; Oxford Alnico in a 1958 5E3
-  open "https://www.tone3000.com/tones/speed-shop-a12q-eminence-1x12-ir-53370"   # free; Weber A12Q (P12Q-style) in an open-back 1x12
-  open "https://www.tone3000.com/tones/impulses-for-diy-tweed-deluxe-5e3-head-63881"  # free; DIY 5E3
+  echo "If a page has moved or doesn't load, just skip it."
+  # tweed Deluxe (press t when sorting)
+  open "https://origineffects.com/product/ir-cab-library/"                      # free (email checkout): 5E3 tweed + Brown Deluxe, Twin, AC30, Marshall, Bogner, Magnatone
+  open "https://www.tone3000.com/tones/1958-deluxe-ir-1615"                     # free (sign in): Oxford Alnico in a 1958 5E3
+  open "https://www.tone3000.com/tones/speed-shop-a12q-eminence-1x12-ir-53370"   # free (sign in): Weber A12Q in an open-back 1x12
+  open "https://www.tone3000.com/tones/impulses-for-diy-tweed-deluxe-5e3-head-63881"  # free (sign in): DIY 5E3
+  if [ "$2" != "tweed" ]; then
+    # other cabs (press y when sorting)
+    open "https://wilkinsonaudio.com/collections/free/products/gods-cab"         # God's Cab: Mesa 4x12 Rectifier, 700+ IRs, many mics and positions
+    open "http://cabs.kalthallen.de/"                                            # Kalthallen Cabs: several cabs, every mic position
+    open "http://www.redwirez.com/free1960g12m25s.jsp"                           # Redwirez: Marshall 1960A with G12M-25 Greenbacks, 17 mics
+    open "https://soundwoofer.com/Library/Index"                                 # Soundwoofer: free library of many cabs (pick the ones you like)
+    open "https://zachweeks.gumroad.com/l/tl806cabir"                            # Zach Weeks: TL806 + 1960B (type 0 for the price)
+    open "https://www.celestionplus.com/free-download/"                          # Celestion's own free speaker IRs
+  fi
   exit 0
 fi
 
