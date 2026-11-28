@@ -174,6 +174,14 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     cabStudioBtn.setColour (TextButton::textColourOffId, Colour (0xffa855ff));
     cabStudioBtn.setTooltip ("Cab Studio: edit your rig's cab (or the IR in it) with two mics, in 3D");
     cabStudioBtn.onClick = [this] { openCabStudio (cabPage == nullptr); };
+    outsideClick.fn = [this] (const MouseEvent& e)
+    {
+        if (cabPage == nullptr || e.eventComponent == nullptr) return;
+        auto* c = e.eventComponent;
+        if (c == cabPage.get() || cabPage->isParentOf (c) || c == &cabStudioBtn || c == &fullBtn) return;
+        MessageManager::callAsync ([this] { if (cabPage != nullptr) openCabStudio (false); });
+    };
+    addMouseListener (&outsideClick, true);
     browseT3k.setColour (TextButton::buttonColourId, theme::raised);
     browseT3k.setTooltip ("Pick tones on TONE3000 and download them into your library");
     browseT3k.onClick = [this]
@@ -306,6 +314,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
 NAMHomeEditor::~NAMHomeEditor()
 {
     if (keyTop != nullptr) keyTop->removeKeyListener (&keyRelay);
+    removeMouseListener (&outsideClick);
     proc.settings().setValue ("winW", getWidth());
     proc.settings().setValue ("winH", getHeight());
     proc.onNotice = nullptr; proc.onRigChanged = nullptr; proc.onToggleTuner = nullptr;
@@ -572,6 +581,7 @@ void NAMHomeEditor::parentHierarchyChanged()
     auto* top = getTopLevelComponent();
     if (top == keyTop.getComponent()) return;
     if (keyTop != nullptr) keyTop->removeKeyListener (&keyRelay);
+    removeMouseListener (&outsideClick);
     keyTop = top;
     if (top != nullptr && top != this) top->addKeyListener (&keyRelay);
 }

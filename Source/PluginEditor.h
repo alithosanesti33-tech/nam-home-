@@ -112,6 +112,9 @@ private:
     juce::TextButton browseT3k { "Browse TONE3000" };
     juce::TextButton cabStudioBtn { "Cab Studio" };
     std::unique_ptr<CabStudioPage> cabPage;
+    // clicking anything outside Cab Studio (the tuner, settings, the library...) closes it, so it
+    // never sits on top of what you opened
+    struct OutsideClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> fn; void mouseDown (const juce::MouseEvent& e) override { if (fn) fn (e); } } outsideClick;
     void openCabStudio (bool open, std::shared_ptr<Block> target = nullptr);
     std::shared_ptr<Block> cabStudioTarget();          // the rig's cab, as a Cab Studio block on the grid
     std::shared_ptr<Block> toCabStudio (int r, int c);  // an IR loader becomes Cab Studio, with its IRs
