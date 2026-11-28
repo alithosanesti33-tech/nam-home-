@@ -44,3 +44,24 @@ private:
     void onStageEvent (const juce::var& v);
     juce::var stateVar() const;
 };
+
+// Cab Studio as its own full-screen page (top bar button). It edits the rig's cab, which isn't a
+// block on the grid: the engine plays it right after the amp.
+class CabStudioPage : public juce::Component
+{
+public:
+    CabStudioPage (NAMHomeProcessor& p, std::shared_ptr<Block> rigCab);
+    void resized() override;
+    void paint (juce::Graphics&) override;
+    void sync();
+    std::shared_ptr<Block> block() const { return cab; }
+    std::function<void()> onClose;
+    std::function<void (const juce::String&)> onError;
+private:
+    NAMHomeProcessor& proc;
+    std::shared_ptr<Block> cab;
+    std::unique_ptr<CabStudioEditor> editor;
+    juce::TextButton power { "On" }, done { "Done" }, offOld { "Turn the Cab block off" };
+    bool oldCabOn = false;
+    int oldCount = 0;
+};

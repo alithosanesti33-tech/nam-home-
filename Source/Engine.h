@@ -25,6 +25,9 @@ public:
     bool findCell (int id, int& r, int& c) const;
     bool rowSpan (int r, int& first, int& last) const;        // columns used by a parallel row
     std::shared_ptr<Block> addBlock (Block::Type t, int r, int c);
+    // Cab Studio: the rig's cab. It isn't on the grid; it plays right after the amp.
+    std::shared_ptr<Block> rigCab (bool create);   // message thread
+
     double getSampleRate() const { return sampleRate; }
 
     // ---- merges for parallel rows (index = row 1..3)
@@ -166,6 +169,8 @@ private:
         int numSpill = 0;
         int first[rows] {}, last[rows] {};
         bool active[rows] {};
+        Block* rigCab = nullptr;
+        int cabRow = 0, cabCol = -1;   // runs after this cell (-1: at the start of the main row)
     };
     void publish();
     void captureScene (SceneState& into) const;
@@ -173,6 +178,7 @@ private:
     void handleMidi (juce::MidiBuffer& midi, const Plan& plan);
 
     std::array<std::array<std::shared_ptr<Block>, cols>, rows> cells;
+    std::shared_ptr<Block> cabStudio;
     std::vector<std::shared_ptr<Block>> keepAlive;   // blocks the live plan may still point at
     Plan live;
     juce::SpinLock lock;

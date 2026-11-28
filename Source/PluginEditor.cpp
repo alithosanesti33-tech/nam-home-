@@ -155,7 +155,7 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     applyDisplaySettings();
 
     for (auto* c : std::initializer_list<Component*> { &libraryBtn, &prevBtn, &nextBtn, &presetBtn, &saveBtn, &tempo, &tapBtn, &metroBtn, &transposeBtn,
-                                                       &browseT3k, &inMeter, &outMeter, &tunerBtn, &fullBtn, &settingsBtn, &liveBtn, &library, &grid })
+                                                       &browseT3k, &cabStudioBtn, &inMeter, &outMeter, &tunerBtn, &fullBtn, &settingsBtn, &liveBtn, &library, &grid })
         addAndMakeVisible (c);
     addChildComponent (drawer);
     addAndMakeVisible (toasts);
@@ -169,6 +169,10 @@ NAMHomeEditor::NAMHomeEditor (NAMHomeProcessor& p)
     saveBtn.onClick = [this] { if (proc.currentPreset.isEmpty()) saveAs (false); else { proc.savePreset (proc.currentPreset); message ("Saved \"" + proc.currentPreset + "\""); } };
     tapBtn.onClick = [this] { proc.engine.tapTempo(); tempo.repaint(); };
     metroBtn.onClick = [this] { proc.engine.metronomeOn = ! proc.engine.metronomeOn.load(); metroBtn.lit = proc.engine.metronomeOn.load(); metroBtn.repaint(); };
+    cabStudioBtn.setColour (TextButton::buttonColourId, theme::raised);
+    cabStudioBtn.setColour (TextButton::textColourOffId, Colour (0xffa855ff));
+    cabStudioBtn.setTooltip ("Cab Studio: your rig's cab with two mics, in 3D (plays right after the amp)");
+    cabStudioBtn.onClick = [this] { openCabStudio (cabPage == nullptr); };
     browseT3k.setColour (TextButton::buttonColourId, theme::raised);
     browseT3k.setTooltip ("Pick tones on TONE3000 and download them into your library");
     browseT3k.onClick = [this]
@@ -406,10 +410,14 @@ void NAMHomeEditor::resized()
     t.removeFromRight (40);
     inMeter.setBounds (t.removeFromRight (90).withSizeKeepingCentre (90, 8));
     t.removeFromRight (230);
+    cabStudioBtn.setBounds (t.removeFromRight (110));
+    t.removeFromRight (8);
     browseT3k.setBounds (t.removeFromRight (jmin (170, jmax (0, t.getWidth() - 10))));
     browseT3k.setVisible (browseT3k.getWidth() > 120);
 
     r.removeFromTop (12);
+    pageArea = r;
+    if (cabPage != nullptr) cabPage->setBounds (pageArea);
     if (libraryOpen)
     {
         library.setBounds (r.removeFromLeft (jlimit (260, 340, getWidth() / 5)));
@@ -518,6 +526,12 @@ void NAMHomeEditor::timerCallback()
     outMeter.setLevel (jmax (proc.engine.outputPeakL.load(), proc.engine.outputPeakR.load()));
     cpu = cpu * 0.9 + proc.engine.getCpuLoad() * 0.1;
     if (drawerOpen) drawer.sync();
+    if (cabPage != nullptr)
+    {
+        // a preset change brings its own cab: follow it
+        if (proc.engine.rigCab (false) != cabPage->block()) openCabStudio (true);
+        else cabPage->sync();
+    }
     {
         const float target = analyzerOpen ? 1.0f : 0.0f;
         if (std::abs (analyzerShown - target) > 0.001f)
@@ -562,6 +576,22 @@ void NAMHomeEditor::mouseDown (const MouseEvent& e)
     if (! panicLabel.isEmpty() && panicLabel.contains (e.getPosition())) { proc.triggerPanic(); repaint(); }
 }
 
+void NAMHomeEditor::openCabStudio (bool open)
+{
+    cabPage = nullptr;
+    if (open)
+    {
+        cabPage = std::make_unique<CabStudioPage> (proc, proc.engine.rigCab (true));
+        cabPage->onClose = [this] { MessageManager::callAsync ([this] { openCabStudio (false); }); };
+        cabPage->onError = [this] (const String& s) { message (s, true); };
+        addAndMakeVisible (*cabPage);
+        cabPage->setBounds (pageArea);
+        toasts.toFront (false);
+    }
+    cabStudioBtn.setColour (TextButton::buttonColourId, open ? Colour (0xffa855ff).withAlpha (0.25f) : theme::raised);
+    grid.repaint();
+}
+
 bool NAMHomeEditor::keyPressed (const KeyPress& k)
 {
     if (liveView != nullptr)
@@ -575,6 +605,7 @@ bool NAMHomeEditor::keyPressed (const KeyPress& k)
         if (tunerPanel != nullptr) { tunerPanel->setVisible (false); MessageManager::callAsync ([this] { tunerPanel = nullptr; liveTuner->setActive (proc.settings().getBoolValue ("liveTuner", false)); resized(); }); return true; }
         if (settingsSheet != nullptr) { settingsSheet = nullptr; return true; }
         if (proc.engine.isLearning()) { proc.engine.cancelLearn(); return true; }
+        if (cabPage != nullptr) { openCabStudio (false); return true; }
         closeDrawer(); return true;
     }
     if (k == KeyPress ('s', ModifierKeys::commandModifier, 0)) { saveBtn.triggerClick(); return true; }

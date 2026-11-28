@@ -20,6 +20,7 @@ void Engine::prepare (double sr, int mb)
     for (auto& row : cells)
         for (auto& b : row)
             if (b != nullptr) b->prepareBlock (sr, maxBlock);
+    if (cabStudio != nullptr) cabStudio->prepareBlock (sr, maxBlock);
     clickSamples = (int) (0.025 * sr);
     resetLimiter (sr);
     for (auto& s : shifter) s.prepare ((float) sr);
@@ -41,9 +42,25 @@ void Engine::publish()
     }
     p.numSpill = 0;
     for (auto& b : spillBlocks) if (p.numSpill < 8) p.spill[p.numSpill++] = b.get();
+    // Cab Studio goes right after the first amp (the main row first); with no amp, after the last
+    // pedal on the main row, or at the start
+    p.rigCab = cabStudio.get();
+    {
+        bool placed = false;
+        for (int r = 0; r < rows && ! placed; ++r)
+            for (int c = 0; c < cols && ! placed; ++c)
+                if (cells[(size_t) r][(size_t) c] != nullptr && cells[(size_t) r][(size_t) c]->getType() == Block::Type::NamAmp) { p.cabRow = r; p.cabCol = c; placed = true; }
+        if (! placed)
+        {
+            p.cabRow = 0; p.cabCol = -1;
+            for (int c = 0; c < cols; ++c)
+                if (auto& b = cells[0][(size_t) c]; b != nullptr && (Block::categoryName (b->getType()) == "Pedals" || Block::categoryName (b->getType()) == "Guitar sims")) p.cabCol = c;
+        }
+    }
     std::vector<std::shared_ptr<Block>> alive;
     for (auto& row : cells) for (auto& b : row) if (b != nullptr) alive.push_back (b);
     for (auto& b : spillBlocks) alive.push_back (b);
+    if (cabStudio != nullptr) alive.push_back (cabStudio);
 
     std::vector<std::shared_ptr<Block>> old;
     {
@@ -69,6 +86,19 @@ std::shared_ptr<Block> Engine::addBlock (Block::Type t, int r, int c)
     return b;
 }
 
+std::shared_ptr<Block> Engine::rigCab (bool create)
+{
+    if (cabStudio == nullptr && create)
+    {
+        std::shared_ptr<Block> b (Block::create (Block::Type::CabStudio).release());
+        b->prepareBlock (sampleRate, maxBlock);
+        cabStudio = b;
+        // scenes made before it existed start with it as it is now
+        publish();
+    }
+    return cabStudio;
+}
+
 void Engine::move (int r1, int c1, int r2, int c2)
 {
     std::swap (cells[(size_t) r1][(size_t) c1], cells[(size_t) r2][(size_t) c2]);
@@ -78,6 +108,7 @@ void Engine::move (int r1, int c1, int r2, int c2)
 void Engine::clearAll()
 {
     for (auto& row : cells) for (auto& b : row) b = nullptr;
+    cabStudio = nullptr;
     for (auto& m : mappings) m = {};
     resetScenes();
     publish();
@@ -96,13 +127,21 @@ void Engine::captureScene (SceneState& into) const
                 for (auto& prm : b->params) vals.push_back (prm->get());
                 into.blocks[b->id] = { b->enabled.load(), std::move (vals) };
             }
+    if (cabStudio != nullptr)
+    {
+        std::vector<float> vals;
+        for (auto& prm : cabStudio->params) vals.push_back (prm->get());
+        into.blocks[cabStudio->id] = { cabStudio->enabled.load(), std::move (vals) };
+    }
     into.valid = true;
 }
 
 void Engine::applyScene (const SceneState& sc)
 {
-    for (auto& row : cells)
-        for (auto& b : row)
+    std::vector<std::shared_ptr<Block>> all;
+    for (auto& row : cells) for (auto& b : row) all.push_back (b);
+    all.push_back (cabStudio);
+    for (auto& b : all)
         {
             if (b == nullptr) continue;
             auto it = sc.blocks.find (b->id);
@@ -160,6 +199,7 @@ juce::String Engine::sceneLabel (int s) const
 std::shared_ptr<Block> Engine::findById (int id) const
 {
     for (auto& row : cells) for (auto& b : row) if (b != nullptr && b->id == id) return b;
+    if (cabStudio != nullptr && cabStudio->id == id) return cabStudio;
     return nullptr;
 }
 
@@ -431,11 +471,13 @@ void Engine::applyMapping (const Mapping& m, int value, bool press, const Plan& 
     if (m.blockId == -1) { if (press) tapFromMidi = true; return; }
     if (m.blockId == sceneMidiId) { if (press) pendingScene = m.param; return; }
     if (m.blockId == setlistMidiId) { if (press) setlistStepFromMidi = m.param == 0 ? -1 : 1; return; }
-    for (int r = 0; r < rows; ++r)
-        for (int c = 0; c < cols; ++c)
-        {
-            Block* b = plan.cell[r][c];
-            if (b == nullptr || b->id != m.blockId) continue;
+    Block* found = plan.rigCab != nullptr && plan.rigCab->id == m.blockId ? plan.rigCab : nullptr;
+    for (int r = 0; r < rows && found == nullptr; ++r)
+        for (int c = 0; c < cols && found == nullptr; ++c)
+            if (plan.cell[r][c] != nullptr && plan.cell[r][c]->id == m.blockId) found = plan.cell[r][c];
+    if (found == nullptr) return;
+    {
+            Block* b = found;
             if (m.param < 0)
             {
                 if (m.toggle) { if (press) b->enabled = ! b->enabled.load(); }
@@ -596,6 +638,11 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
         for (int i = 0; i < n; ++i) l[i] = rr[i] = inputSample (input, i);   // a guitar input is mono
     }
 
+    auto runCab = [&] (float* l, float* r_)
+    {
+        if (auto* cb = plan.rigCab) { cb->cleanInput = cleanFor[0]; cb->interfaceIn[0] = cleanBuf[0].data(); cb->interfaceIn[1] = cleanBuf[1].data(); cb->interfaceInputs = numIn; cb->run (l, r_, n); }
+    };
+    if (plan.cabRow == 0 && plan.cabCol < 0) runCab (mL, mR);
     for (int c = 0; c < cols; ++c)
     {
         for (int r = 1; r < rows; ++r)
@@ -606,6 +653,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
             }
 
         if (auto* b = plan.cell[0][c]) { b->cleanInput = cleanFor[0]; b->interfaceIn[0] = cleanBuf[0].data(); b->interfaceIn[1] = cleanBuf[1].data(); b->interfaceInputs = numIn; b->run (mL, mR, n); }
+        if (plan.cabRow == 0 && plan.cabCol == c) runCab (mL, mR);
         for (int r = 1; r < rows; ++r)
         {
             if (! plan.active[r] || plan.cell[r][c] == nullptr || continues[r]) continue;
@@ -615,6 +663,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
                 plan.cell[r][c]->interfaceIn[0] = cleanBuf[0].data(); plan.cell[r][c]->interfaceIn[1] = cleanBuf[1].data();
                 plan.cell[r][c]->interfaceInputs = numIn;
                 plan.cell[r][c]->run (buf[r][0].data(), buf[r][1].data(), n);
+                if (plan.cabRow == r && plan.cabCol == c) runCab (buf[r][0].data(), buf[r][1].data());
             }
         }
 
@@ -643,7 +692,7 @@ void Engine::process (juce::AudioBuffer<float>& buffer, int numIn, juce::MidiBuf
     {
         if (! continues[r] || ! plan.active[r]) continue;
         for (int c = 0; c < cols; ++c)
-            if (auto* b = plan.cell[r][c]) { b->cleanInput = cleanFor[0]; b->interfaceIn[0] = cleanBuf[0].data(); b->interfaceIn[1] = cleanBuf[1].data(); b->interfaceInputs = numIn; b->run (mL, mR, n); }
+            if (auto* b = plan.cell[r][c]) { b->cleanInput = cleanFor[0]; b->interfaceIn[0] = cleanBuf[0].data(); b->interfaceIn[1] = cleanBuf[1].data(); b->interfaceInputs = numIn; b->run (mL, mR, n); if (plan.cabRow == r && plan.cabCol == c) runCab (mL, mR); }
     }
 
     // separate rigs (own input) are mixed in at the end with their level and pan
@@ -847,6 +896,12 @@ juce::var Engine::toVar() const
                 blocks.add (v);
             }
     o->setProperty ("blocks", blocks);
+    if (cabStudio != nullptr)
+    {
+        auto v = cabStudio->toVar();
+        v.getDynamicObject()->setProperty ("id", cabStudio->id);
+        o->setProperty ("cabStudio", v);
+    }
 
     juce::Array<juce::var> ms;
     for (int r = 1; r < rows; ++r)
@@ -939,6 +994,19 @@ void Engine::fromVar (const juce::var& v)
             idMap[(int) bv.getProperty ("id", 0)] = b->id;
             cells[(size_t) r][(size_t) c] = b;
         }
+    cabStudio = nullptr;
+    {
+        const auto cv = v.getProperty ("cabStudio", {});
+        if (cv.isObject())
+            if (auto made = Block::fromVar (cv))
+            {
+                std::shared_ptr<Block> b (made.release());
+                b->prepareBlock (sampleRate, maxBlock);
+                b->loadExtra (cv.getProperty ("extra", {}));
+                idMap[(int) cv.getProperty ("id", 0)] = b->id;
+                cabStudio = b;
+            }
+    }
 
     if (auto* arr = v.getProperty ("merges", {}).getArray())
         for (int r = 1; r < rows && r - 1 < arr->size(); ++r)

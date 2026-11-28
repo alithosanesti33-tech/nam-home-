@@ -424,3 +424,73 @@ void CabStudioEditor::paint (Graphics& g)
         g.drawFittedText (st, a.removeFromBottom (30), Justification::bottomLeft, 2);
     }
 }
+
+//==============================================================================
+CabStudioPage::CabStudioPage (NAMHomeProcessor& p, std::shared_ptr<Block> rigCab) : proc (p), cab (std::move (rigCab))
+{
+    editor = std::make_unique<CabStudioEditor> (proc, cab);
+    editor->onError = [this] (const String& s) { if (onError) onError (s); };
+    addAndMakeVisible (*editor);
+    power.setClickingTogglesState (true);
+    power.setToggleState (cab->enabled.load(), dontSendNotification);
+    power.onClick = [this] { cab->enabled = power.getToggleState(); power.setButtonText (power.getToggleState() ? "On" : "Off"); proc.dirty = true; repaint(); };
+    done.onClick = [this] { if (onClose) onClose(); };
+    offOld.onClick = [this]
+    {
+        // the grid's own Cab blocks would make it two cabs
+        for (int r = 0; r < Engine::rows; ++r)
+            for (int c = 0; c < Engine::cols; ++c)
+                if (auto b = proc.engine.get (r, c); b != nullptr && b->getType() == Block::Type::Cab) b->enabled = false;
+        proc.dirty = true;
+        sync();
+    };
+    for (auto* b : { &power, &done }) addAndMakeVisible (*b);
+    addChildComponent (offOld);
+    sync();
+}
+
+void CabStudioPage::sync()
+{
+    if (power.getToggleState() != cab->enabled.load())
+    {
+        power.setToggleState (cab->enabled.load(), dontSendNotification);
+        power.setButtonText (cab->enabled.load() ? "On" : "Off");
+    }
+    int n = 0;
+    for (int r = 0; r < Engine::rows; ++r)
+        for (int c = 0; c < Engine::cols; ++c)
+            if (auto b = proc.engine.get (r, c); b != nullptr && b->getType() == Block::Type::Cab && b->enabled.load()) ++n;
+    auto* cs = dynamic_cast<CabStudioBlock*> (cab.get());
+    const bool clash = n > 0 && cab->enabled.load() && cs != nullptr && cs->getCab().isNotEmpty() && cs->param ("mode")->getInt() == 0;
+    if (clash != oldCabOn || n != oldCount) { oldCabOn = clash; oldCount = n; offOld.setVisible (clash); resized(); repaint(); }
+    editor->sync();
+}
+
+void CabStudioPage::resized()
+{
+    auto r = getLocalBounds();
+    auto head = r.removeFromTop (48).reduced (16, 8);
+    done.setBounds (head.removeFromRight (80));
+    head.removeFromRight (8);
+    power.setBounds (head.removeFromRight (60));
+    head.removeFromRight (12);
+    if (offOld.isVisible()) offOld.setBounds (head.removeFromRight (190));
+    editor->setBounds (r);
+}
+
+void CabStudioPage::paint (Graphics& g)
+{
+    g.fillAll (theme::bg);
+    auto head = getLocalBounds().removeFromTop (48).reduced (18, 8);
+    g.setColour (Colour (0xffa855ff));
+    g.setFont (theme::font (17.0f, 2));
+    g.drawText ("CAB STUDIO", head.removeFromLeft (140), Justification::centredLeft);
+    g.setColour (theme::faint);
+    g.setFont (theme::font (12.0f));
+    String note = cab->enabled.load() ? "Plays right after your amp" : "Off: your rig plays without it";
+    if (oldCabOn) note = "Your rig also has a Cab block on, so you'd hear two cabs";
+    g.setColour (oldCabOn ? theme::amber : theme::faint);
+    g.drawText (note, head.withTrimmedRight (360), Justification::centredLeft);
+    g.setColour (theme::line);
+    g.drawHorizontalLine (47, 0.0f, (float) getWidth());
+}

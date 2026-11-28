@@ -156,7 +156,6 @@ void LibraryPanel::refresh()
         }
         if (! sx.empty()) { addSection ("Saxophone"); shown.insert (shown.end(), sx.begin(), sx.end()); }
     }
-    if (all || filter == 4) addBuiltIns ("Cab Studio", [] (Block::Type t) { return t == Block::Type::CabStudio; });
     if (all || filter == 5)
         for (auto* grp : { "Drive", "Dynamics & EQ", "Wah, filters & talk box", "Pitch", "Modulation", "Delay", "Reverb & ambient", "Guitar sims" })
             addBuiltIns (grp, [grp] (Block::Type t) { return Block::libraryGroup (t) == grp; });

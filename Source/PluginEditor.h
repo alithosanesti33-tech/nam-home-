@@ -6,6 +6,7 @@
 #include "ui/Widgets.h"
 #include "ui/GridView.h"
 #include "ui/BlockEditors.h"
+#include "ui/CabStudioEditor.h"
 #include "ui/Panels.h"
 #include "ui/Tuner.h"
 #include "ui/SceneBar.h"
@@ -109,6 +110,10 @@ private:
     juce::TextButton tapBtn { "Tap" };
     IconButton metroBtn { IconButton::Icon::Metronome, "Metronome" };
     juce::TextButton browseT3k { "Browse TONE3000" };
+    juce::TextButton cabStudioBtn { "Cab Studio" };
+    std::unique_ptr<CabStudioPage> cabPage;
+    void openCabStudio (bool open);
+    juce::Rectangle<int> pageArea;
     juce::TextButton transposeBtn;
     void updateTransposeText();
     Meter inMeter, outMeter;
