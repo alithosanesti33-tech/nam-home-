@@ -47,6 +47,7 @@ public:
     bool rowContinues (int r) const { return r > 0 && rowInput[r].load() == 3 && (r == 1 || rowInput[r - 1].load() == 3); }
     // insert-style editing: put a block at a position in a row; the blocks after it slide over
     bool insertInRow (int r, int index, std::shared_ptr<Block> b);
+    void prepareNew (Block& b) { b.prepareBlock (sampleRate, maxBlock); }   // a block made outside the engine, before insertInRow
     void removeFromRow (int r, int c, bool closeGap);
     // replace a row's blocks with this list, packed from 'startCol' (already-prepared blocks keep their state)
     bool setRow (int r, int startCol, const std::vector<std::shared_ptr<Block>>& blocks);

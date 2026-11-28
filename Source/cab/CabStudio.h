@@ -36,7 +36,10 @@ public:
     // start from IRs you had in an IR loader: the cab they belong to, Mic A on IR 1's spot (and Mic
     // B on IR 2's), "As recorded" so it sounds the same. False if the IR isn't in your library.
     bool seedFrom (const juce::File& ir1, const juce::File& ir2, float level1, float level2);
-    juce::File originalIr (int k) const;   // what it was started from (to go back to the IR loader)
+    juce::File originalIr (int k) const;
+    // Just the IR: play the original IR(s) as they are (mic settings kept for later), or back to Cab Studio
+    void setJustIr (bool on);
+    bool justIr() const { return param ("mode")->getInt() == 2; }   // what it was started from (to go back to the IR loader)
 
     // what the builder did, for the editor
     struct Info

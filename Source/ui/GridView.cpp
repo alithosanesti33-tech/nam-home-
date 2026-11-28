@@ -202,12 +202,24 @@ void GridView::drawIcon (Graphics& g, Block& b, Rectangle<float> r, Colour c)
             for (int k = 1; k < 5; ++k) g.drawHorizontalLine ((int) (body.getY() + body.getHeight() * (float) k / 5.0f), body.getX() + s * 0.08f, body.getRight() - s * 0.08f);
             break;
         }
-        case T::Cab:
+        case T::Cab: case T::CabStudio:
         {
             auto body = box.reduced (s * 0.06f);
             Path p; p.addRoundedRectangle (body, s * 0.06f); fillStroke (p);
             g.setColour (c.darker (0.7f)); g.fillEllipse (body.reduced (body.getWidth() * 0.16f));
             g.setColour (c.brighter (0.4f)); g.fillEllipse (body.withSizeKeepingCentre (body.getWidth() * 0.22f, body.getWidth() * 0.22f));
+            // Cab Studio on: a mic on the speaker (Just the IR and Enhance only look like a plain cab)
+            if (t == T::CabStudio && b.param ("mode") != nullptr && b.param ("mode")->getInt() == 0)
+            {
+                const float w = s * 0.13f;
+                const auto head = Point<float> (body.getCentreX() + s * 0.2f, body.getCentreY() - s * 0.14f);
+                Path mic;
+                mic.addRoundedRectangle (head.x - w * 0.5f, head.y - w * 0.5f, w * 2.6f, w, w * 0.5f);
+                mic.applyTransform (AffineTransform::rotation (-0.6f, head.x, head.y));
+                g.setColour (Colour (0xff1a1a1e)); g.fillPath (mic);
+                g.setColour (Colour (0xff00f0d0)); g.strokePath (mic, PathStrokeType (jmax (1.2f, s * 0.03f)));
+                g.fillEllipse (head.x - w * 0.32f, head.y - w * 0.32f, w * 0.64f, w * 0.64f);
+            }
             break;
         }
         case T::Wah: case T::Volume:

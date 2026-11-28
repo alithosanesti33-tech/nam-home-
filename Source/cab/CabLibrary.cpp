@@ -376,6 +376,7 @@ bool Library::locate (const juce::File& f, Entry& cabOut, Ir& irOut) const
 
 juce::File Library::fileFor (const juce::String& rel) const
 {
+    if (juce::File::isAbsolutePath (rel)) return juce::File (rel);
     return rel.startsWith ("@lib/") ? root().getParentDirectory().getChildFile (rel.substring (5)) : store().getChildFile (rel);
 }
 

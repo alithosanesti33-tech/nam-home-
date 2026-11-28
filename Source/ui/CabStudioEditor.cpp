@@ -310,7 +310,7 @@ var CabStudioEditor::stateVar() const
     {
         const String s = k == 0 ? "a" : "b";
         auto* m = new DynamicObject();
-        m->setProperty ("on", cs.param (s + "On")->on() && cs.param ("mode")->getInt() == 0);
+        m->setProperty ("on", cs.param (s + "On")->on() && cs.param ("mode")->getInt() == 0);   // no mics on the cab unless Cab Studio is on
         m->setProperty ("model", cs.param (s + "Model")->getInt());
         m->setProperty ("spk", cs.param (s + "Spk")->getInt());
         m->setProperty ("pos", cs.param (s + "Pos")->get());
@@ -322,6 +322,7 @@ var CabStudioEditor::stateVar() const
     }
     root->setProperty ("mics", mics);
     root->setProperty ("selected", selectedMic);
+    root->setProperty ("dim", cs.param ("mode")->getInt() == 2);   // Just the IR: the cab lights go down
     return var (root);
 }
 
@@ -401,7 +402,7 @@ Rectangle<int> CabStudioEditor::layoutSpecial (Rectangle<int> r)
     if (speakerBox.isVisible()) { speakerBox.setBounds (side.removeFromTop (28)); side.removeFromTop (8); }
     infoArea = side;
 
-    stage->setVisible (! enhance);
+    stage->setVisible (! enhance);   // (Just the IR keeps the cab, dimmed, with no mics)
     stage->setBounds (stageArea);
     return r;
 }
@@ -412,6 +413,13 @@ void CabStudioEditor::paint (Graphics& g)
     const auto inf = cs.info();
     auto a = infoArea;
     g.setFont (theme::font (11.0f, 2));
+    if (cs.param ("mode")->getInt() == 2)
+    {
+        g.setColour (theme::muted);
+        g.setFont (theme::font (12.0f));
+        g.drawFittedText ("Just the IR: the plain IR is playing, nothing modelled. Your mic positions are saved; press Use Cab Studio at the top to go back to them.\n\n" + inf.source[0] + (inf.source[1].isNotEmpty() ? "\n" + inf.source[1] : String()), a.removeFromTop (150), Justification::topLeft, 10);
+        return;
+    }
     if (cs.param ("mode")->getInt() == 1)
     {
         g.setColour (theme::muted);
@@ -488,8 +496,15 @@ CabStudioPage::CabStudioPage (NAMHomeProcessor& p, std::shared_ptr<Block> rigCab
     power.setToggleState (cab->enabled.load(), dontSendNotification);
     power.onClick = [this] { cab->enabled = power.getToggleState(); power.setButtonText (power.getToggleState() ? "On" : "Off"); proc.dirty = true; repaint(); };
     done.onClick = [this] { if (onClose) onClose(); };
-    useIr.setTooltip ("Go back to a plain IR loader with the IR Mic A is on (and Mic B's, if it's on)");
-    useIr.onClick = [this] { if (onUseIr) onUseIr(); };
+    useIr.setTooltip ("Just the IR: play the plain IR again (your mic settings are kept for when you come back)");
+    useIr.onClick = [this]
+    {
+        auto* cs = dynamic_cast<CabStudioBlock*> (cab.get());
+        if (cs == nullptr) return;
+        cs->setJustIr (! cs->justIr());
+        proc.dirty = true;
+        sync(); repaint();   // stays open: the cab dims and the mics come off; the tile loses its mic
+    };
     info.lit = BlockEditor::infoMode();
     info.onClick = [this]
     {
@@ -528,6 +543,11 @@ void CabStudioPage::sync()
     auto* cs = dynamic_cast<CabStudioBlock*> (cab.get());
     const bool clash = n > 0 && cab->enabled.load() && cs != nullptr && cs->getCab().isNotEmpty() && cs->param ("mode")->getInt() == 0;
     if (clash != oldCabOn || n != oldCount) { oldCabOn = clash; oldCount = n; offOld.setVisible (clash); resized(); repaint(); }
+    if (cs != nullptr)
+    {
+        const String t = cs->justIr() ? "Use Cab Studio" : "Just the IR";
+        if (useIr.getButtonText() != t) { useIr.setButtonText (t); repaint(); }
+    }
     editor->sync();
 }
 
@@ -556,7 +576,10 @@ void CabStudioPage::paint (Graphics& g)
     g.drawText ("CAB STUDIO", head.removeFromLeft (140), Justification::centredLeft);
     g.setColour (theme::faint);
     g.setFont (theme::font (12.0f));
-    String note = cab->enabled.load() ? "Editing the cab block on your grid" : "Off: the cab block is bypassed";
+    auto* csb = dynamic_cast<CabStudioBlock*> (cab.get());
+    String note = ! cab->enabled.load() ? "Off: the cab block is bypassed"
+                : csb != nullptr && csb->justIr() ? "Just the IR: Cab Studio is off (your mic settings are saved)"
+                : "Editing the cab block on your grid";
     if (oldCabOn) note = "Your rig also has another Cab block on, so you'd hear two cabs";
     g.setColour (oldCabOn ? theme::amber : theme::faint);
     g.drawText (note, head.withTrimmedLeft (150).withTrimmedRight (520), Justification::centredLeft);

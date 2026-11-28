@@ -135,7 +135,7 @@ private:
 //==============================================================================
 CabStudioBlock::CabStudioBlock() : Block (Type::CabStudio)
 {
-    mode = &addChoice ("mode", "Mode", { "Cab", "Enhance only" }, 0);
+    mode = &addChoice ("mode", "Mode", { "Cab Studio", "Enhance only", "Just the IR" }, 0);
     for (int k = 0; k < numMics; ++k)
     {
         const juce::String s = k == 0 ? "a" : "b", N = k == 0 ? "Mic A " : "Mic B ";
@@ -216,6 +216,21 @@ bool CabStudioBlock::seedFrom (const juce::File& ir1, const juce::File& ir2, flo
     return true;
 }
 
+void CabStudioBlock::setJustIr (bool on)
+{
+    if (on)
+    {
+        std::lock_guard<std::mutex> l (lock);
+        // never started from an IR: use the measured IRs the mics are nearest to
+        if (fromIr[0].isEmpty() && last.file[0].isNotEmpty())
+        {
+            fromIr[0] = cab::Library::get().fileFor (last.file[0]).getFullPathName();
+            fromIr[1] = mp[1].on->on() && last.file[1].isNotEmpty() ? cab::Library::get().fileFor (last.file[1]).getFullPathName() : juce::String();
+        }
+    }
+    mode->set (on ? 2.0f : 0.0f);   // the mic settings stay as they are, for when you come back
+}
+
 juce::File CabStudioBlock::originalIr (int k) const
 {
     std::lock_guard<std::mutex> l (lock);
@@ -227,6 +242,7 @@ juce::File CabStudioBlock::originalIr (int k) const
 juce::String CabStudioBlock::getSubtitle() const
 {
     if (mode->getInt() == 1) return "Enhance only";
+    if (mode->getInt() == 2) { std::lock_guard<std::mutex> l (lock); return juce::File (fromIr[0]).getFileNameWithoutExtension(); }
     const auto i = info();
     if (getCab().isEmpty()) return "Pick a cab";
     if (i.cabMissing) return "Cab not found";
@@ -280,6 +296,10 @@ juce::String CabStudioBlock::signature() const
         s << cabId << "|" << speakerType << "|";
     }
     s << mode->getInt() << "|" << autoAlign->getInt() << "|" << alignB->get();
+    {
+        std::lock_guard<std::mutex> l (lock);
+        s << "|" << fromIr[0] << "|" << fromIr[1];
+    }
     for (auto& m : mp) s << "|" << m.model->getInt() << m.spk->getInt() << "," << m.pos->get() << "," << m.dist->get() << "," << m.angle->get() << "," << m.pol->getInt() << m.on->getInt();
     return s;
 }
@@ -303,6 +323,34 @@ void CabStudioBlock::build()
 
     std::vector<float> built[numMics];
     int firstSound[numMics] { 0, 0 };
+    if (mode->getInt() == 2)
+    {
+        // Just the IR: the file(s) exactly as an IR loader plays them, nothing modelled
+        juce::String files[2];
+        {
+            std::lock_guard<std::mutex> l (lock);
+            files[0] = fromIr[0]; files[1] = fromIr[1];
+            if (files[0].isEmpty()) { files[0] = last.file[0]; files[1] = mp[1].on->on() ? last.file[1] : juce::String(); }   // the IRs the mics were on
+        }
+        for (int k = 0; k < numMics; ++k)
+        {
+            hasIr[k] = false;
+            if (files[k].isEmpty()) continue;
+            auto a = cab::Library::get().audio (files[k]);
+            if (a == nullptr || a->empty()) continue;
+            juce::AudioBuffer<float> b (1, (int) a->size());
+            double energy = 0;
+            for (int i = 0; i < (int) a->size(); ++i) { b.setSample (0, i, (*a)[(size_t) i]); energy += (double) (*a)[(size_t) i] * (*a)[(size_t) i]; }
+            if (energy > 1e-8) b.applyGain ((float) (0.125 / std::sqrt (energy)));
+            conv[k].loadImpulseResponse (std::move (b), irRate, juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+            hasIr[k] = true;
+            inf.source[k] = "Just the IR: " + juce::File (files[k]).getFileName();
+            inf.measured[k] = true;
+        }
+        std::lock_guard<std::mutex> l (lock);
+        last = inf;
+        return;
+    }
     for (int k = 0; k < numMics; ++k)
     {
         auto& m = mp[(size_t) k];
@@ -548,7 +596,8 @@ void CabStudioBlock::process (float* L, float* R, int n)
     const bool enhance = mode->getInt() == 1;
     if (! enhance)
     {
-        const bool a = hasIr[0].load() && mp[0].on->on(), b = hasIr[1].load() && mp[1].on->on();
+        const bool justIr = mode->getInt() == 2;
+        const bool a = hasIr[0].load() && (justIr || mp[0].on->on()), b = hasIr[1].load() && (justIr || mp[1].on->on());
         if (! a && ! b) return;   // no cab yet: pass the signal through, like an empty IR loader
         float* m = monoIn.getWritePointer (0);
         for (int i = 0; i < n; ++i) m[i] = 0.5f * (L[i] + R[i]);
@@ -570,8 +619,9 @@ void CabStudioBlock::process (float* L, float* R, int n)
         if (ls == OnlyA) { wA = a ? 1.0f : 0.0f; wB = 0; }
         if (ls == OnlyB) { wB = b ? 1.0f : 0.0f; wA = 0; }
         if (a && b && ls == Both) { const float norm = 1.0f / std::sqrt (wA * wA + wB * wB); wA *= norm; wB *= norm; }   // about the same loudness across the blend
-        gainA.setTarget (wA * dbToGain (mp[0].level->get()) * dbToGain (-0.35f * (mp[0].dist->get() - 1.0f)));
-        gainB.setTarget (wB * dbToGain (mp[1].level->get()) * dbToGain (-0.35f * (mp[1].dist->get() - 1.0f)));
+        if (justIr) { wA = a ? 1.0f : 0.0f; wB = b ? 1.0f : 0.0f; }   // as the IR loader mixes them
+        gainA.setTarget (wA * dbToGain (mp[0].level->get()) * (justIr ? 1.0f : dbToGain (-0.35f * (mp[0].dist->get() - 1.0f))));
+        gainB.setTarget (wB * dbToGain (mp[1].level->get()) * (justIr ? 1.0f : dbToGain (-0.35f * (mp[1].dist->get() - 1.0f))));
         const float* oa = micOut.getReadPointer (0);
         const float* ob = micOut.getReadPointer (1);
         for (int i = 0; i < n; ++i) { const float s = oa[i] * gainA.next() + ob[i] * gainB.next(); L[i] = s; R[i] = s; }

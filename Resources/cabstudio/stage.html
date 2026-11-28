@@ -47,6 +47,7 @@ header{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:8
 <div class="tag" id="tagB" style="background:var(--b)"></div>
 <p id="hint">Hover a mic to see what it is · drag a mic across the speaker · scroll on a mic for distance · shift-drag to angle it · drag empty space to orbit, scroll to zoom. Rings on the speaker show where the pack really measured.</p>
 <div id="empty"><div><b>Pick a cab</b>Choose one from the list on the left, or drop IR packs into Cabs/Inbox on your SSD.</div></div>
+<div id="dimNote" style="position:fixed;left:0;right:0;bottom:30px;text-align:center;color:#8a8f98;font-size:12px;display:none;z-index:2;pointer-events:none">Just the IR · Cab Studio is off</div>
 <div id="err">The 3D view couldn't start here (it needs WebGL). The controls below still work.</div>
 
 <script src="three.min.js"></script>
@@ -527,6 +528,12 @@ function applyState(s) {
     setModel(i, MODELS[src.model | 0] || 'sm57');
   });
   if (typeof s.selected === 'number') selected = s.selected;
+  // Just the IR: Cab Studio is off, so the cab sits in the dark with no mics
+  const dim = !!s.dim;
+  key.intensity = dim ? 0.5 : 2.4; rim.intensity = dim ? 0.25 : 1.3; fill.intensity = dim ? 0.1 : 0.35;
+  renderer.toneMappingExposure = dim ? 0.55 : 1.05;
+  $('dimNote').style.display = dim ? 'block' : 'none';
+  dirty = true;
   if (cab) refresh();
 }
 window.cabStudioState = applyState;

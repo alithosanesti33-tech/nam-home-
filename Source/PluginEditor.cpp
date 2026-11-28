@@ -541,6 +541,14 @@ void NAMHomeEditor::timerCallback()
     if (cabPage != nullptr)
     {
         // a preset change brings its own cab: follow it
+        // anything else that opens (tuner, settings, live mode...) comes first: Cab Studio's 3D view
+        // would otherwise sit on top of it
+        for (int i = getNumChildComponents(); --i >= 0;)
+        {
+            auto* ch = getChildComponent (i);
+            if (ch == cabPage.get()) break;
+            if (ch->isVisible() && ch != &toasts && ch->getBounds().intersects (pageArea)) { openCabStudio (false); return; }
+        }
         // a preset change takes its cab with it
         int r, c;
         if (! findCell (proc.engine, cabPage->block(), r, c) && proc.engine.rigCab (false) != cabPage->block()) openCabStudio (false);
@@ -666,6 +674,10 @@ std::shared_ptr<Block> NAMHomeEditor::cabStudioTarget()
     for (int r = 0; r < Engine::rows && ac < 0; ++r) for (int c = 0; c < Engine::cols && ac < 0; ++c)
         if (auto b = e.get (r, c); b != nullptr && b->getType() == Block::Type::NamAmp) { ar = r; ac = c; }
     std::shared_ptr<Block> b (Block::create (Block::Type::CabStudio).release());
+    e.prepareNew (*b);   // insertInRow doesn't prepare it (playing an unprepared block crashes)
+    if (ac >= 0)
+        if (auto amp = std::dynamic_pointer_cast<NamBlock> (e.get (ar, ac)); amp != nullptr && amp->includesCab())
+            b->param ("mode")->set (1);   // the capture has its cab: tone controls only, no second cab
     const int at = ac + 1;
     bool placed = false;
     if (at < Engine::cols && e.get (ar, at) == nullptr) { e.set (ar, at, b); placed = true; }
@@ -689,7 +701,6 @@ void NAMHomeEditor::openCabStudio (bool open, std::shared_ptr<Block> target)
         cabPage = std::make_unique<CabStudioPage> (proc, target);
         cabPage->onClose = [this] { MessageManager::callAsync ([this] { openCabStudio (false); }); };
         cabPage->onError = [this] (const String& s) { message (s, true); };
-        cabPage->onUseIr = [this] { auto b = cabPage != nullptr ? cabPage->block() : nullptr; MessageManager::callAsync ([this, b] { toIrLoader (b); }); };
         addAndMakeVisible (*cabPage);
         cabPage->setBounds (pageArea);
         toasts.toFront (false);
