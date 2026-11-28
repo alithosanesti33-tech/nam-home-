@@ -23,7 +23,8 @@ std::vector<Band> micColour (cab::Mic m)
     {
         case cab::Mic::SM57:  return { { Biquad::Type::Peak, 5500, 1.0f, 4.0f }, { Biquad::Type::LowShelf, 200, 0.7f, -2.0f }, { Biquad::Type::HighShelf, 12000, 0.7f, -4.0f } };
         case cab::Mic::MD421: return { { Biquad::Type::Peak, 4000, 0.8f, 3.0f }, { Biquad::Type::LowShelf, 150, 0.7f, 1.5f }, { Biquad::Type::HighShelf, 13000, 0.7f, -2.0f } };
-        case cab::Mic::R121:  return { { Biquad::Type::HighShelf, 5000, 0.6f, -6.0f }, { Biquad::Type::LowShelf, 180, 0.7f, 2.0f }, { Biquad::Type::Peak, 900, 0.8f, 1.0f } };
+        // the R-121 is darker up top than a 57 but fairly even in the lows: a little warmth, no boom
+        case cab::Mic::R121:  return { { Biquad::Type::HighShelf, 5500, 0.6f, -5.0f }, { Biquad::Type::LowShelf, 120, 0.7f, 0.5f }, { Biquad::Type::Peak, 280, 1.0f, -1.5f }, { Biquad::Type::Peak, 1200, 0.8f, 0.8f } };
         case cab::Mic::U87:   return { { Biquad::Type::HighShelf, 8000, 0.7f, 2.0f }, { Biquad::Type::Peak, 3000, 0.7f, 1.0f }, { Biquad::Type::LowShelf, 100, 0.7f, 1.0f } };
         default:              return {};
     }
@@ -394,8 +395,9 @@ void CabStudioBlock::build()
         if (std::abs (dDist) > 0.2f)
         {
             // further back: less proximity bass (more for the ribbon), a little less air
-            const float prox = mic == cab::Mic::R121 ? 2.2f : mic == cab::Mic::U87 ? 1.2f : 1.6f;
-            filter (acc, Biquad::Type::LowShelf, 160, 0.7f, juce::jlimit (-10.0f, 8.0f, -prox * dDist * (dDist > 0 ? 1.0f / (1.0f + 0.15f * dDist) : 1.0f)));
+            const float prox = mic == cab::Mic::R121 ? 1.5f : mic == cab::Mic::U87 ? 1.2f : 1.6f;
+            // closer adds bass, but never more than a few dB (more just sounds woofy)
+            filter (acc, Biquad::Type::LowShelf, 140, 0.7f, juce::jlimit (-10.0f, 4.0f, -prox * dDist * (dDist > 0 ? 1.0f / (1.0f + 0.15f * dDist) : 1.0f)));
             filter (acc, Biquad::Type::HighShelf, 7000, 0.7f, juce::jlimit (-4.0f, 2.0f, -0.25f * dDist));
             modelled.add ("distance");
         }
