@@ -251,7 +251,7 @@ LibraryItem Library::readItem (const juce::File& f) const
 static bool isMediaFile (const juce::File& f, const juce::File& root)
 {
     const auto rel = f.getRelativePathFrom (root).replaceCharacter ('\\', '/');
-    for (auto* top : { "Instruments/", "Loops/", "Drums/", "Setlists/", "Presets/" })
+    for (auto* top : { "Instruments/", "Loops/", "Drums/", "Setlists/", "Presets/", "Cabs/" })
         if (rel.startsWithIgnoreCase (top)) return true;
     return false;
 }

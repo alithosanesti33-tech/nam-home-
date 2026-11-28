@@ -47,6 +47,7 @@ target_sources(NAMHome PRIVATE
     Source/Effects2.cpp
     Source/Rhythm.cpp
     Source/ParamHelp.cpp
+    Source/cab/CabLibrary.cpp
     Source/Measure.cpp
     Source/Instruments.cpp
     Source/TalkBox.cpp

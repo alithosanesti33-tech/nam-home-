@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "cab/CabLibrary.h"
 #include "Rhythm.h"
 #include "PluginEditor.h"
 
@@ -72,7 +73,9 @@ NAMHomeProcessor::NAMHomeProcessor()
     engine.panicLatch = appSettings->getBoolValue ("panicMidiLatch", false);
     loadOutputSettings();
     ndsp::SaxSampleBank::get().setRoot (library.getFolder());
-    rhythm::setLibraryFolder (library.getFolder());   // loops and drum sounds live on the same drive   // recordings live next to your captures (on your SSD)
+    rhythm::setLibraryFolder (library.getFolder());   // loops, drums and recordings live on the SSD
+    cab::Library::get().setRoot (library.getFolder());   // Cab Studio IRs: <library>/Cabs (on the SSD)
+    cab::Library::get().rescan();
     {
         // tell the installer where the library is, so downloads (sax recordings) land on the same drive
         auto f = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
