@@ -2,7 +2,7 @@
 # Cab Studio IR helper.
 #   ~/namcabs.sh open        opens the download pages for free cab IRs (you click download)
 #   ~/namcabs.sh open tweed  just the tweed Deluxe ones
-#   ~/namcabs.sh        sorts what you downloaded into Cab Studio's Inbox on your library drive
+#   ~/namcabs.sh             moves the IRs you downloaded into Cab Studio (no questions)
 # Nothing here is uploaded anywhere: the IRs stay on your drive.
 
 LIBFILE="$HOME/Library/Application Support/NAM Home/library-path.txt"
@@ -36,60 +36,65 @@ case "$NH" in
 esac
 mkdir -p "$INBOX" || exit 1
 
-ask() { local a; read -r -p "$1 " a </dev/tty; echo "$a"; }
-speaker_for() {
-  echo "  Which speaker is it?" >/dev/tty
-  echo "    1) Jensen P12Q (Origin Effects 5E3)" >/dev/tty
-  echo "    2) Oxford Alnico (1958 Deluxe)" >/dev/tty
-  echo "    3) Weber A12Q (Speed Shop)" >/dev/tty
-  echo "    4) DIY 5E3 (outmodedelectronics)" >/dev/tty
-  echo "    5) Jensen P12Q (Audio Assault 5C3)" >/dev/tty
-  echo "    6) another speaker (type its name)" >/dev/tty
-  case "$(ask '  Number:')" in
-    1) echo "Jensen P12Q (Origin 5E3)" ;;
-    2) echo "Oxford Alnico (1958 Deluxe)" ;;
-    3) echo "Weber A12Q (Speed Shop)" ;;
-    4) echo "Jensen DIY 5E3" ;;
-    5) echo "Jensen P12Q (Audio Assault 5C3)" ;;
-    *) ask "  Speaker name:" ;;
+# Works out by itself which downloads are cab IR packs (zips full of WAVs, or small WAV files) and
+# leaves everything else alone. The tweed Deluxe packs all go into one cab, one speaker each.
+tweed_speaker() {
+  local n; n="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$n" in
+    *1958*deluxe*|*oxford*)            echo "Oxford Alnico (1958 Deluxe)" ;;
+    *speed*shop*|*a12q*)               echo "Weber A12Q (Speed Shop)" ;;
+    *diy*tweed*|*5e3*head*)            echo "Jensen DIY 5E3" ;;
+    *usa*tweed*|*audio*assault*)       echo "Jensen P12Q (Audio Assault 5C3)" ;;
+    *tweed*|*5e3*|*5c3*)               echo "Tweed speaker" ;;
+    *)                                 echo "" ;;
   esac
+}
+is_ir_zip() {   # has WAVs in it, and no apps or installers
+  local list; list="$(unzip -l "$1" 2>/dev/null)" || return 1
+  echo "$list" | grep -qi '\.wav$' || return 1
+  echo "$list" | grep -qiE '\.(app|pkg|dmg|exe|mp3|m4a)(/|$)' && return 1
+  return 0
 }
 
 cd "$HOME/Downloads" || exit 1
 shopt -s nullglob nocaseglob
 moved=0
-for f in *.zip *.wav *.aif *.aiff; do
-  echo
-  echo "$f"
-  case "$(ask '  Cab Studio? t = tweed Deluxe, y = other cab pack, n = skip:')" in
-    t|T)
-      SPK="$(speaker_for)"
-      DEST="$TWEED/$SPK"; mkdir -p "$DEST"
-      if [[ "$f" == *.zip || "$f" == *.ZIP ]]; then
-        TMP="$(mktemp -d)"; ditto -x -k "$f" "$TMP" || { echo "  Couldn't unzip it."; rm -rf "$TMP"; continue; }
-        # a library of several cabs (like Origin's): take just the tweed folders, keep the rest as its own pack
-        TW="$(find "$TMP" -type d -iname '*tweed*' | grep -iv '__MACOSX')"
-        if [ -n "$TW" ]; then
-          echo "$TW" | while IFS= read -r d; do
-            [ -d "$d" ] || continue
-            sub="$(basename "$(dirname "$d")")"
-            mkdir -p "$DEST/$sub"; ditto "$d" "$DEST/$sub/$(basename "$d")"; rm -rf "$d"
-          done
-          REST="$INBOX/$(basename "$f" .zip)"
-          mkdir -p "$REST"; ditto "$TMP" "$REST"
-          echo "  Tweed IRs -> Tweed Deluxe 5E3 1x12 / $SPK; the other cabs -> $(basename "$REST")"
-        else
-          ditto "$TMP" "$DEST"
-          echo "  -> Tweed Deluxe 5E3 1x12 / $SPK"
-        fi
-        rm -rf "$TMP"; rm -f "$f"
-      else
-        mv "$f" "$DEST/" && echo "  -> Tweed Deluxe 5E3 1x12 / $SPK"
-      fi
-      moved=$((moved + 1)) ;;
-    y|Y) mv "$f" "$INBOX/" && echo "  -> Inbox"; moved=$((moved + 1)) ;;
-    *) echo "  skipped" ;;
-  esac
+for f in *.zip; do
+  is_ir_zip "$f" || continue
+  SPK="$(tweed_speaker "$f")"
+  TMP="$(mktemp -d)"
+  ditto -x -k "$f" "$TMP" || continue
+  rm -rf "$TMP/__MACOSX"
+  TW="$(find "$TMP" -type d -iname '*tweed*')"
+  if [ -n "$SPK" ]; then
+    # a tweed pack: all of it is one speaker of the tweed Deluxe
+    mkdir -p "$TWEED/$SPK"; ditto "$TMP" "$TWEED/$SPK"
+    echo "Tweed Deluxe <- $f  (speaker: $SPK)"
+  elif [ -n "$TW" ]; then
+    # a library with a tweed cab inside (Origin Effects): the tweed joins the tweed Deluxe, the rest stays a pack
+    echo "$TW" | while IFS= read -r d; do
+      [ -d "$d" ] || continue
+      sub="$(basename "$(dirname "$d")")"
+      mkdir -p "$TWEED/Jensen P12Q (Origin 5E3)/$sub"
+      ditto "$d" "$TWEED/Jensen P12Q (Origin 5E3)/$sub/$(basename "$d")" && rm -r "$d"
+    done
+    REST="$INBOX/$(basename "$f" .zip)"; mkdir -p "$REST"; ditto "$TMP" "$REST"
+    echo "Tweed Deluxe <- tweed part of $f  (speaker: Jensen P12Q); the other cabs -> $(basename "$f" .zip)"
+  else
+    REST="$INBOX/$(basename "$f" .zip)"; mkdir -p "$REST"; ditto "$TMP" "$REST"
+    echo "Cab Studio <- $f"
+  fi
+  rm -r "$TMP"; rm -f "$f"
+  moved=$((moved + 1))
+done
+for f in *.wav *.aif *.aiff; do
+  # cab IRs are tiny; anything over 2 MB is probably a song or recording, so it stays put
+  [ "$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f")" -lt 2000000 ] || continue
+  SPK="$(tweed_speaker "$f")"
+  if [ -n "$SPK" ]; then mkdir -p "$TWEED/$SPK"; mv "$f" "$TWEED/$SPK/"; echo "Tweed Deluxe <- $f"
+  else mv "$f" "$INBOX/"; echo "Cab Studio <- $f"; fi
+  moved=$((moved + 1))
 done
 echo
-echo "Moved $moved. Open Cab Studio in NAM Home and they'll be in the cab list."
+if [ "$moved" -eq 0 ]; then echo "No IR downloads found in Downloads."
+else echo "Done: $moved moved. Open Cab Studio in NAM Home and they're in the cab list."; fi
